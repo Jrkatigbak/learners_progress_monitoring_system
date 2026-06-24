@@ -1,6 +1,6 @@
 <?php
 
-require_once __DIR__ . '/includes/auth_guard.php';
+require_once __DIR__ . '/includes/admin_guard.php';
 
 // Reusable escaping helper for table and form output.
 function e(string $value): string
@@ -10,7 +10,32 @@ function e(string $value): string
 
 $errors = [];
 $success = $_GET['success'] ?? '';
+$search = trim($_GET['search'] ?? '');
 $editingClass = null;
+$classUploadDirectory = __DIR__ . '/uploads/classes';
+$classUploadPathPrefix = 'uploads/classes/';
+
+if (!is_dir($classUploadDirectory)) {
+    // Class wallpapers are stored separately from learner photos and course banners.
+    mkdir($classUploadDirectory, 0777, true);
+}
+
+if (is_dir($classUploadDirectory)) {
+    chmod($classUploadDirectory, 0777);
+}
+
+function deleteClassBanner(string $bannerPath): void
+{
+    if ($bannerPath === '' || strpos($bannerPath, 'uploads/classes/') !== 0) {
+        return;
+    }
+
+    $fullPath = __DIR__ . '/' . $bannerPath;
+
+    if (is_file($fullPath)) {
+        unlink($fullPath);
+    }
+}
 
 if (isset($_GET['edit'])) {
     $editStatement = $pdo->prepare('SELECT * FROM classes WHERE id = :id LIMIT 1');
@@ -22,9 +47,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
 
     if ($action === 'delete') {
+        $bannerStatement = $pdo->prepare('SELECT banner_image FROM classes WHERE id = :id LIMIT 1');
+        $bannerStatement->execute(['id' => (int) ($_POST['id'] ?? 0)]);
+        $bannerToDelete = (string) ($bannerStatement->fetchColumn() ?: '');
+
         // Delete stays as a POST action so a simple page visit cannot remove data.
         $deleteStatement = $pdo->prepare('DELETE FROM classes WHERE id = :id');
         $deleteStatement->execute(['id' => (int) ($_POST['id'] ?? 0)]);
+        deleteClassBanner($bannerToDelete);
 
         header('Location: classes.php?success=deleted');
         exit;
@@ -32,30 +62,67 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     $id = (int) ($_POST['id'] ?? 0);
     $className = trim($_POST['class_name'] ?? '');
-    $section = trim($_POST['section'] ?? '');
-    $adviser = trim($_POST['adviser'] ?? '');
-    $schoolYear = trim($_POST['school_year'] ?? '');
+    $teacherId = (int) ($_POST['teacher_id'] ?? 0);
+    $teacher = '';
     $status = $_POST['status'] ?? 'Active';
     $description = trim($_POST['description'] ?? '');
+    $existingBanner = trim($_POST['existing_banner'] ?? '');
+    $bannerImage = $existingBanner;
 
     if ($className === '') {
         $errors[] = 'Class name is required.';
     }
 
-    if ($section === '') {
-        $errors[] = 'Section is required.';
-    }
+    if ($teacherId <= 0) {
+        $errors[] = 'Choose a teacher.';
+    } else {
+        // Classes store teacher_id for relationships and teacher text for older views.
+        $teacherStatement = $pdo->prepare('SELECT full_name FROM teachers WHERE id = :id AND status = :status LIMIT 1');
+        $teacherStatement->execute([
+            'id' => $teacherId,
+            'status' => 'Active',
+        ]);
+        $teacher = (string) ($teacherStatement->fetchColumn() ?: '');
 
-    if ($adviser === '') {
-        $errors[] = 'Adviser is required.';
-    }
-
-    if ($schoolYear === '') {
-        $errors[] = 'School year is required.';
+        if ($teacher === '') {
+            $errors[] = 'Choose an active teacher from the masterlist.';
+        }
     }
 
     if (!in_array($status, ['Active', 'Inactive'], true)) {
         $errors[] = 'Choose a valid status.';
+    }
+
+    if (isset($_FILES['banner_image']) && $_FILES['banner_image']['error'] !== UPLOAD_ERR_NO_FILE) {
+        if ($_FILES['banner_image']['error'] !== UPLOAD_ERR_OK) {
+            $errors[] = 'Class wallpaper could not be uploaded.';
+        } elseif (!is_writable($classUploadDirectory)) {
+            $errors[] = 'Class wallpaper upload folder is not writable.';
+        } else {
+            $allowedTypes = [
+                'image/jpeg' => 'jpg',
+                'image/png' => 'png',
+                'image/webp' => 'webp',
+            ];
+            $mimeType = mime_content_type($_FILES['banner_image']['tmp_name']);
+
+            if (!isset($allowedTypes[$mimeType])) {
+                $errors[] = 'Class wallpaper must be JPG, PNG, or WEBP.';
+            } elseif ($_FILES['banner_image']['size'] > 4 * 1024 * 1024) {
+                $errors[] = 'Class wallpaper must be 4MB or smaller.';
+            } else {
+                // Store class wallpapers with generated names to avoid filename collisions.
+                $filename = 'class-' . date('YmdHis') . '-' . bin2hex(random_bytes(4)) . '.' . $allowedTypes[$mimeType];
+                $targetPath = $classUploadDirectory . '/' . $filename;
+
+                if (move_uploaded_file($_FILES['banner_image']['tmp_name'], $targetPath)) {
+                    $bannerImage = $classUploadPathPrefix . $filename;
+                    deleteClassBanner($existingBanner);
+                } else {
+                    $errors[] = 'Class wallpaper could not be saved.';
+                }
+            }
+        }
     }
 
     if (!$errors) {
@@ -64,18 +131,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $statement = $pdo->prepare(
                 'UPDATE classes
                  SET class_name = :class_name,
-                     section = :section,
-                     adviser = :adviser,
-                     school_year = :school_year,
+                     teacher = :teacher,
+                     teacher_id = :teacher_id,
+                     banner_image = :banner_image,
                      status = :status,
                      description = :description
                  WHERE id = :id'
             );
             $statement->execute([
                 'class_name' => $className,
-                'section' => $section,
-                'adviser' => $adviser,
-                'school_year' => $schoolYear,
+                'teacher' => $teacher,
+                'teacher_id' => $teacherId,
+                'banner_image' => $bannerImage !== '' ? $bannerImage : null,
                 'status' => $status,
                 'description' => $description !== '' ? $description : null,
                 'id' => $id,
@@ -87,14 +154,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         // Create a new class record from the Add Class form.
         $statement = $pdo->prepare(
-            'INSERT INTO classes (class_name, section, adviser, school_year, status, description)
-             VALUES (:class_name, :section, :adviser, :school_year, :status, :description)'
+            'INSERT INTO classes (class_name, teacher_id, teacher, banner_image, status, description)
+             VALUES (:class_name, :teacher_id, :teacher, :banner_image, :status, :description)'
         );
         $statement->execute([
             'class_name' => $className,
-            'section' => $section,
-            'adviser' => $adviser,
-            'school_year' => $schoolYear,
+            'teacher_id' => $teacherId,
+            'teacher' => $teacher,
+            'banner_image' => $bannerImage !== '' ? $bannerImage : null,
             'status' => $status,
             'description' => $description !== '' ? $description : null,
         ]);
@@ -106,22 +173,69 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $editingClass = [
         'id' => $id,
         'class_name' => $className,
-        'section' => $section,
-        'adviser' => $adviser,
-        'school_year' => $schoolYear,
+        'teacher_id' => $teacherId,
+        'teacher' => $teacher,
+        'banner_image' => $bannerImage,
         'status' => $status,
         'description' => $description,
     ];
 }
 
-$classesStatement = $pdo->query('SELECT * FROM classes ORDER BY created_at DESC, id DESC');
+if ($search !== '') {
+    // Search keeps the class list focused without changing the add/edit modal state.
+    $classesStatement = $pdo->prepare(
+        "SELECT classes.*,
+                COALESCE(teachers.full_name, classes.teacher) AS display_teacher
+         FROM classes
+         LEFT JOIN teachers ON teachers.id = classes.teacher_id
+         WHERE classes.class_name LIKE :class_name_search
+            OR classes.teacher LIKE :teacher_search
+            OR teachers.full_name LIKE :teacher_master_search
+            OR classes.status LIKE :status_search
+            OR classes.description LIKE :description_search
+         ORDER BY classes.created_at DESC, classes.id DESC"
+    );
+    $searchTerm = '%' . $search . '%';
+    $classesStatement->execute([
+        'class_name_search' => $searchTerm,
+        'teacher_search' => $searchTerm,
+        'teacher_master_search' => $searchTerm,
+        'status_search' => $searchTerm,
+        'description_search' => $searchTerm,
+    ]);
+} else {
+    $classesStatement = $pdo->query(
+        'SELECT classes.*,
+                COALESCE(teachers.full_name, classes.teacher) AS display_teacher
+         FROM classes
+         LEFT JOIN teachers ON teachers.id = classes.teacher_id
+         ORDER BY classes.created_at DESC, classes.id DESC'
+    );
+}
 $classRows = $classesStatement->fetchAll();
+$teachers = $pdo->query(
+    "SELECT id, teacher_code, full_name, specialization
+     FROM teachers
+     WHERE status = 'Active'
+     ORDER BY full_name"
+)->fetchAll();
+
+if ($editingClass && empty($editingClass['teacher_id'])) {
+    // Older class rows may only have teacher text, so match them to the masterlist for edit forms.
+    foreach ($teachers as $teacherOption) {
+        if ((string) $teacherOption['full_name'] === (string) ($editingClass['teacher'] ?? '')) {
+            $editingClass['teacher_id'] = (int) $teacherOption['id'];
+            break;
+        }
+    }
+}
+
 $formClass = $editingClass ?: [
     'id' => 0,
     'class_name' => '',
-    'section' => '',
-    'adviser' => '',
-    'school_year' => '2026-2027',
+    'teacher_id' => 0,
+    'teacher' => '',
+    'banner_image' => '',
     'status' => 'Active',
     'description' => '',
 ];
@@ -158,12 +272,11 @@ $successMessages = [
         </span>
       </a>
       <nav class="sidebar-nav">
-        <a href="dashboard.php"><i class="fa-solid fa-grid-2"></i> Dashboard</a>
+        <a href="dashboard.php"><i class="fa-solid fa-gauge-high"></i> Dashboard</a>
         <a class="active" href="classes.php"><i class="fa-solid fa-chalkboard-user"></i> Classes</a>
+        <a href="teachers.php"><i class="fa-solid fa-user-tie"></i> Teachers</a>
         <a href="learners.php"><i class="fa-solid fa-users"></i> Learners</a>
-        <a href="enrollments.php"><i class="fa-solid fa-book-open-reader"></i> Enrollments</a>
-        <a href="#"><i class="fa-solid fa-chart-simple"></i> Reports</a>
-        <a href="#"><i class="fa-solid fa-gear"></i> Settings</a>
+        <a href="grades.php"><i class="fa-solid fa-star"></i> Grades</a>
       </nav>
       <div class="sidebar-footer">
         <p class="mb-1">Logged in as</p>
@@ -199,15 +312,6 @@ $successMessages = [
       </header>
 
       <section class="content-wrap">
-        <div class="hero-panel">
-          <div>
-            <span class="section-kicker">Class Management</span>
-            <h2>Classes</h2>
-            <p>Create, update, and monitor class sections used for learner progress tracking.</p>
-          </div>
-          <a href="#classForm" class="btn btn-outline-light"><i class="fa-solid fa-plus me-2"></i>Add Class</a>
-        </div>
-
         <?php if (isset($successMessages[$success])): ?>
           <div class="alert alert-success" role="alert"><?php echo e($successMessages[$success]); ?></div>
         <?php endif; ?>
@@ -220,126 +324,155 @@ $successMessages = [
           </div>
         <?php endif; ?>
 
-        <div class="row g-4">
-          <div class="col-xl-4">
-            <div class="panel-card h-100" id="classForm">
-              <span class="section-kicker"><?php echo ((int) $formClass['id'] > 0) ? 'Edit Class' : 'Add Class'; ?></span>
-              <h2 class="h5 mb-4"><?php echo ((int) $formClass['id'] > 0) ? 'Update class details' : 'Create class record'; ?></h2>
-              <form method="post" class="module-form">
-                <input type="hidden" name="id" value="<?php echo (int) $formClass['id']; ?>">
-                <div class="mb-3">
-                  <label class="form-label" for="class_name">Class name</label>
-                  <input type="text" class="form-control" id="class_name" name="class_name" value="<?php echo e($formClass['class_name']); ?>" required>
-                </div>
-                <div class="mb-3">
-                  <label class="form-label" for="section">Section</label>
-                  <input type="text" class="form-control" id="section" name="section" value="<?php echo e($formClass['section']); ?>" required>
-                </div>
-                <div class="mb-3">
-                  <label class="form-label" for="adviser">Adviser</label>
-                  <input type="text" class="form-control" id="adviser" name="adviser" value="<?php echo e($formClass['adviser']); ?>" required>
-                </div>
-                <div class="row g-3">
-                  <div class="col-sm-7">
-                    <label class="form-label" for="school_year">School year</label>
-                    <input type="text" class="form-control" id="school_year" name="school_year" value="<?php echo e($formClass['school_year']); ?>" required>
-                  </div>
-                  <div class="col-sm-5">
-                    <label class="form-label" for="status">Status</label>
-                    <select class="form-select" id="status" name="status">
-                      <option value="Active" <?php echo $formClass['status'] === 'Active' ? 'selected' : ''; ?>>Active</option>
-                      <option value="Inactive" <?php echo $formClass['status'] === 'Inactive' ? 'selected' : ''; ?>>Inactive</option>
-                    </select>
-                  </div>
-                </div>
-                <div class="my-3">
-                  <label class="form-label" for="description">Description</label>
-                  <textarea class="form-control" id="description" name="description" rows="4"><?php echo e($formClass['description'] ?? ''); ?></textarea>
-                </div>
-                <div class="d-flex flex-wrap gap-2">
-                  <button type="submit" class="btn btn-primary">
-                    <i class="fa-solid fa-floppy-disk me-2"></i><?php echo ((int) $formClass['id'] > 0) ? 'Update Class' : 'Add Class'; ?>
-                  </button>
-                  <?php if ((int) $formClass['id'] > 0): ?>
-                    <a class="btn btn-outline-secondary" href="classes.php">Cancel</a>
-                  <?php endif; ?>
-                </div>
-              </form>
+        <div class="panel-card">
+          <div class="d-flex flex-wrap align-items-center justify-content-between gap-3 mb-4">
+            <div>
+              <span class="section-kicker">Records</span>
+              <h2 class="h5 mb-0">Class list</h2>
             </div>
+            <button type="button" class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#classModal">
+              <i class="fa-solid fa-plus me-2"></i>Add Class
+            </button>
           </div>
 
-          <div class="col-xl-8">
-            <div class="panel-card">
-              <div class="d-flex flex-wrap align-items-center justify-content-between gap-3 mb-4">
-                <div>
-                  <span class="section-kicker">Records</span>
-                  <h2 class="h5 mb-0">Class list</h2>
-                </div>
-                <a href="#classForm" class="btn btn-sm btn-primary"><i class="fa-solid fa-plus me-2"></i>Add Class</a>
-              </div>
-              <div class="table-responsive">
-                <table class="table align-middle module-table">
-                  <thead>
-                    <tr>
-                      <th>Class</th>
-                      <th>Adviser</th>
-                      <th>School Year</th>
-                      <th>Status</th>
-                      <th class="text-end">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <?php if (!$classRows): ?>
-                      <tr>
-                        <td colspan="5" class="text-center text-secondary py-5">No classes added yet.</td>
-                      </tr>
-                    <?php endif; ?>
-                    <?php foreach ($classRows as $classRow): ?>
-                      <tr>
-                        <td>
-                          <strong><?php echo e($classRow['class_name']); ?></strong><br>
-                          <span class="text-secondary small"><?php echo e($classRow['section']); ?></span>
-                          <?php if (!empty($classRow['description'])): ?>
-                            <div class="text-secondary small mt-1"><?php echo e($classRow['description']); ?></div>
-                          <?php endif; ?>
-                        </td>
-                        <td><?php echo e($classRow['adviser']); ?></td>
-                        <td><?php echo e($classRow['school_year']); ?></td>
-                        <td>
-                          <span class="badge <?php echo $classRow['status'] === 'Active' ? 'text-bg-success' : 'text-bg-secondary'; ?>">
-                            <?php echo e($classRow['status']); ?>
-                          </span>
-                        </td>
-                        <td class="text-end">
-                          <div class="table-actions">
-                            <a class="btn btn-sm btn-outline-primary" href="classes.php?edit=<?php echo (int) $classRow['id']; ?>#classForm">
-                              <i class="fa-solid fa-pen-to-square"></i>
-                              <span class="visually-hidden">Edit</span>
-                            </a>
-                            <form method="post" onsubmit="return confirm('Delete this class?');">
-                              <input type="hidden" name="action" value="delete">
-                              <input type="hidden" name="id" value="<?php echo (int) $classRow['id']; ?>">
-                              <button type="submit" class="btn btn-sm btn-outline-danger">
-                                <i class="fa-solid fa-trash"></i>
-                                <span class="visually-hidden">Delete</span>
-                              </button>
-                            </form>
-                          </div>
-                        </td>
-                      </tr>
-                    <?php endforeach; ?>
-                  </tbody>
-                </table>
-              </div>
+          <form method="get" class="search-bar mb-4">
+            <div class="input-group">
+              <span class="input-group-text"><i class="fa-solid fa-magnifying-glass"></i></span>
+              <input type="search" class="form-control" name="search" value="<?php echo e($search); ?>" placeholder="Search classes or teacher">
+              <button type="submit" class="btn btn-primary">Search</button>
+              <?php if ($search !== ''): ?>
+                <a href="classes.php" class="btn btn-outline-secondary">Clear</a>
+              <?php endif; ?>
             </div>
-          </div>
+          </form>
+
+          <?php if (!$classRows): ?>
+            <div class="empty-state">
+              <i class="fa-solid fa-chalkboard-user"></i>
+              <p>No classes found.</p>
+            </div>
+          <?php else: ?>
+            <div class="class-card-grid">
+              <?php foreach ($classRows as $classRow): ?>
+                <article class="class-card">
+                  <a class="class-card-open-link" href="class_workspace.php?class_id=<?php echo (int) $classRow['id']; ?>&tool=dashboard" aria-label="Open <?php echo e($classRow['class_name']); ?>">
+                    <div class="class-wallpaper">
+                      <?php if (!empty($classRow['banner_image'])): ?>
+                        <img src="<?php echo e($classRow['banner_image']); ?>" alt="<?php echo e($classRow['class_name']); ?> wallpaper">
+                      <?php else: ?>
+                        <div class="class-wallpaper-placeholder">
+                          <i class="fa-solid fa-chalkboard-user"></i>
+                        </div>
+                      <?php endif; ?>
+                      <span class="class-status-badge <?php echo $classRow['status'] === 'Active' ? 'is-active' : 'is-inactive'; ?>">
+                        <?php echo e($classRow['status']); ?>
+                      </span>
+                    </div>
+                    <div class="class-card-body">
+                      <h3><?php echo e($classRow['class_name']); ?></h3>
+                      <p class="class-teacher"><i class="fa-solid fa-user-tie"></i><?php echo e($classRow['display_teacher'] ?? $classRow['teacher'] ?? ''); ?></p>
+                      <?php if (!empty($classRow['description'])): ?>
+                        <p class="class-description"><?php echo e($classRow['description']); ?></p>
+                      <?php endif; ?>
+                    </div>
+                  </a>
+                  <footer class="class-card-footer">
+                    <a class="btn btn-sm btn-primary" href="class_workspace.php?class_id=<?php echo (int) $classRow['id']; ?>&tool=dashboard">
+                      <i class="fa-solid fa-folder-open me-2"></i>Open Class
+                    </a>
+                    <a class="learner-icon-button" href="classes.php?edit=<?php echo (int) $classRow['id']; ?>" aria-label="Edit class">
+                      <i class="fa-solid fa-pen"></i>
+                    </a>
+                    <form method="post" onsubmit="return confirm('Delete this class?');">
+                      <input type="hidden" name="action" value="delete">
+                      <input type="hidden" name="id" value="<?php echo (int) $classRow['id']; ?>">
+                      <button type="submit" class="learner-icon-button is-danger" aria-label="Delete class">
+                        <i class="fa-solid fa-trash"></i>
+                      </button>
+                    </form>
+                  </footer>
+                </article>
+              <?php endforeach; ?>
+            </div>
+          <?php endif; ?>
         </div>
       </section>
     </main>
   </div>
 
+  <div class="modal fade" id="classModal" tabindex="-1" aria-labelledby="classModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+      <div class="modal-content">
+        <div class="modal-header">
+          <div>
+            <span class="section-kicker"><?php echo ((int) $formClass['id'] > 0) ? 'Edit Class' : 'Add Class'; ?></span>
+            <h2 class="modal-title h5" id="classModalLabel"><?php echo ((int) $formClass['id'] > 0) ? 'Update class details' : 'Create class record'; ?></h2>
+          </div>
+          <a href="classes.php<?php echo $search !== '' ? '?search=' . urlencode($search) : ''; ?>" class="btn-close" aria-label="Close"></a>
+        </div>
+        <form method="post" enctype="multipart/form-data" class="module-form">
+          <div class="modal-body">
+            <input type="hidden" name="id" value="<?php echo (int) $formClass['id']; ?>">
+            <input type="hidden" name="existing_banner" value="<?php echo e($formClass['banner_image'] ?? ''); ?>">
+            <div class="mb-3">
+              <label class="form-label" for="banner_image">Class wallpaper</label>
+              <input type="file" class="form-control" id="banner_image" name="banner_image" accept="image/png,image/jpeg,image/webp">
+              <div class="small text-secondary mt-2">Best size: 1600 x 600 px. JPG, PNG, or WEBP up to 4MB.</div>
+              <?php if (!empty($formClass['banner_image'])): ?>
+                <div class="small text-secondary mt-1">Current wallpaper will stay unless a new one is uploaded.</div>
+              <?php endif; ?>
+            </div>
+            <div class="mb-3">
+              <label class="form-label" for="class_name">Class name</label>
+              <input type="text" class="form-control" id="class_name" name="class_name" value="<?php echo e($formClass['class_name']); ?>" required>
+            </div>
+            <div class="mb-3">
+              <label class="form-label" for="teacher">Teacher</label>
+              <select class="form-select" id="teacher" name="teacher_id" required>
+                <option value="">Choose teacher</option>
+                <?php foreach ($teachers as $teacherOption): ?>
+                  <option value="<?php echo (int) $teacherOption['id']; ?>" <?php echo (int) ($formClass['teacher_id'] ?? 0) === (int) $teacherOption['id'] ? 'selected' : ''; ?>>
+                    <?php echo e($teacherOption['full_name'] . ' - ' . $teacherOption['teacher_code']); ?>
+                    <?php echo !empty($teacherOption['specialization']) ? e(' (' . $teacherOption['specialization'] . ')') : ''; ?>
+                  </option>
+                <?php endforeach; ?>
+              </select>
+              <?php if (!$teachers): ?>
+                <div class="small text-danger mt-2">Add an active teacher in the Teachers masterlist first.</div>
+              <?php endif; ?>
+            </div>
+            <div class="mb-3">
+              <label class="form-label" for="status">Status</label>
+              <select class="form-select" id="status" name="status">
+                <option value="Active" <?php echo $formClass['status'] === 'Active' ? 'selected' : ''; ?>>Active</option>
+                <option value="Inactive" <?php echo $formClass['status'] === 'Inactive' ? 'selected' : ''; ?>>Inactive</option>
+              </select>
+            </div>
+            <div class="mb-3">
+              <label class="form-label" for="description">Description</label>
+              <textarea class="form-control" id="description" name="description" rows="4"><?php echo e($formClass['description'] ?? ''); ?></textarea>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <a class="btn btn-outline-secondary" href="classes.php<?php echo $search !== '' ? '?search=' . urlencode($search) : ''; ?>">Cancel</a>
+            <button type="submit" class="btn btn-primary">
+              <i class="fa-solid fa-floppy-disk me-2"></i><?php echo ((int) $formClass['id'] > 0) ? 'Update Class' : 'Add Class'; ?>
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
   <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  <?php if ($errors || (int) $formClass['id'] > 0): ?>
+    <script>
+      window.addEventListener('DOMContentLoaded', function () {
+        new bootstrap.Modal(document.getElementById('classModal')).show();
+      });
+    </script>
+  <?php endif; ?>
   <script src="js/app.js"></script>
 </body>
 </html>

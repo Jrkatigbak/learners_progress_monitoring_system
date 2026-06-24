@@ -2,5 +2,5 @@
 
 require_once __DIR__ . '/includes/bootstrap.php';
 
-header('Location: ' . ($auth->check() ? 'dashboard.php' : 'login.php'));
+header('Location: ' . ($auth->check() ? $auth->redirectPath() : 'login.php'));
 exit;

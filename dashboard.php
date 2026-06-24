@@ -1,6 +1,6 @@
 <?php
 
-require_once __DIR__ . '/includes/auth_guard.php';
+require_once __DIR__ . '/includes/admin_guard.php';
 
 // Dashboard counters come from the live modules instead of fixed placeholders.
 $classCount = (int) $pdo->query('SELECT COUNT(*) FROM classes')->fetchColumn();
@@ -10,6 +10,9 @@ $completedLearnerCount = (int) $pdo->query("SELECT COUNT(*) FROM learners WHERE 
 $averageProgress = (int) round((float) $pdo->query('SELECT COALESCE(AVG(progress_percent), 0) FROM learners')->fetchColumn());
 // Course enrollment count is shown as a first-class dashboard metric.
 $enrollmentCount = (int) $pdo->query('SELECT COUNT(*) FROM course_enrollments')->fetchColumn();
+// Grade counters keep the admin dashboard connected to the class task workflow.
+$taskCount = (int) $pdo->query('SELECT COUNT(*) FROM class_tasks')->fetchColumn();
+$gradeCount = (int) $pdo->query('SELECT COUNT(*) FROM learner_grades')->fetchColumn();
 ?>
 <!doctype html>
 <html lang="en">
@@ -38,12 +41,11 @@ $enrollmentCount = (int) $pdo->query('SELECT COUNT(*) FROM course_enrollments')-
         </span>
       </a>
       <nav class="sidebar-nav">
-        <a class="active" href="dashboard.php"><i class="fa-solid fa-grid-2"></i> Dashboard</a>
+        <a class="active" href="dashboard.php"><i class="fa-solid fa-gauge-high"></i> Dashboard</a>
         <a href="classes.php"><i class="fa-solid fa-chalkboard-user"></i> Classes</a>
+        <a href="teachers.php"><i class="fa-solid fa-user-tie"></i> Teachers</a>
         <a href="learners.php"><i class="fa-solid fa-users"></i> Learners</a>
-        <a href="enrollments.php"><i class="fa-solid fa-book-open-reader"></i> Enrollments</a>
-        <a href="#"><i class="fa-solid fa-chart-simple"></i> Reports</a>
-        <a href="#"><i class="fa-solid fa-gear"></i> Settings</a>
+        <a href="grades.php"><i class="fa-solid fa-star"></i> Grades</a>
       </nav>
       <div class="sidebar-footer">
         <p class="mb-1">Logged in as</p>
@@ -85,7 +87,10 @@ $enrollmentCount = (int) $pdo->query('SELECT COUNT(*) FROM course_enrollments')-
             <h2>Learner progress at a glance</h2>
             <p>Monitor the most important learner activity, progress updates, and pending monitoring work from one dashboard.</p>
           </div>
-          <a href="logout.php" class="btn btn-outline-light"><i class="fa-solid fa-arrow-right-from-bracket me-2"></i>Logout</a>
+          <div class="d-flex flex-wrap gap-2">
+            <a href="grades.php" class="btn btn-light"><i class="fa-solid fa-star me-2"></i>Manage Grades</a>
+            <a href="logout.php" class="btn btn-outline-light"><i class="fa-solid fa-arrow-right-from-bracket me-2"></i>Logout</a>
+          </div>
         </div>
 
         <div class="row g-4 mb-4">
@@ -121,6 +126,14 @@ $enrollmentCount = (int) $pdo->query('SELECT COUNT(*) FROM course_enrollments')-
               <small class="text-success"><i class="fa-solid fa-check"></i> Course assignments</small>
             </div>
           </div>
+          <div class="col-md-6 col-xl-3">
+            <div class="metric-card">
+              <span class="metric-icon bg-danger-subtle text-danger"><i class="fa-solid fa-star"></i></span>
+              <p>Grade Records</p>
+              <h3><?php echo $gradeCount; ?></h3>
+              <small class="text-secondary"><?php echo $taskCount; ?> class tasks</small>
+            </div>
+          </div>
         </div>
 
         <div class="row g-4">
@@ -138,29 +151,25 @@ $enrollmentCount = (int) $pdo->query('SELECT COUNT(*) FROM course_enrollments')-
                   <thead>
                     <tr>
                       <th>Class</th>
-                      <th>Section</th>
+                      <th>Teacher</th>
                       <th>Status</th>
-                      <th>Adviser</th>
                     </tr>
                   </thead>
                   <tbody>
                     <tr>
                       <td><strong>Work Immersion</strong><br><span class="text-secondary small">Updated today</span></td>
-                      <td>Grade 12 - ICT A</td>
-                      <td><span class="badge text-bg-success">Active</span></td>
                       <td>Maria Santos</td>
+                      <td><span class="badge text-bg-success">Active</span></td>
                     </tr>
                     <tr>
                       <td><strong>Practicum Program</strong><br><span class="text-secondary small">Yesterday</span></td>
-                      <td>BSIT 4A</td>
-                      <td><span class="badge text-bg-success">Active</span></td>
                       <td>Juan Dela Cruz</td>
+                      <td><span class="badge text-bg-success">Active</span></td>
                     </tr>
                     <tr>
                       <td><strong>Career Readiness</strong><br><span class="text-secondary small">Jun 12</span></td>
-                      <td>Grade 12 - ABM B</td>
-                      <td><span class="badge text-bg-warning">Pending</span></td>
                       <td>Elena Reyes</td>
+                      <td><span class="badge text-bg-warning">Pending</span></td>
                     </tr>
                   </tbody>
                 </table>
@@ -176,7 +185,7 @@ $enrollmentCount = (int) $pdo->query('SELECT COUNT(*) FROM course_enrollments')-
                 <i class="fa-solid fa-circle-check text-success"></i>
                 <div>
                   <strong>Review class list</strong>
-                  <p>Keep sections and advisers updated.</p>
+                  <p>Keep classes and teachers updated.</p>
                 </div>
               </div>
               <div class="task-item">
@@ -193,6 +202,9 @@ $enrollmentCount = (int) $pdo->query('SELECT COUNT(*) FROM course_enrollments')-
                   <p>Export learner progress summary by Friday.</p>
                 </div>
               </div>
+              <a href="grades.php" class="btn btn-sm btn-primary w-100 mt-3">
+                <i class="fa-solid fa-star me-2"></i>Input Learner Grades
+              </a>
             </div>
           </div>
         </div>

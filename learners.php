@@ -1,6 +1,6 @@
 <?php
 
-require_once __DIR__ . '/includes/auth_guard.php';
+require_once __DIR__ . '/includes/admin_guard.php';
 require_once __DIR__ . '/classes/SmtpMailer.php';
 
 $mailerConfig = require __DIR__ . '/config/Mailer.php';
@@ -83,6 +83,116 @@ function sendLearnerCredentialEmail(SmtpMailer $mailer, string $email, string $n
     return $mailer->send($email, $name, $subject, $htmlBody, $textBody);
 }
 
+function sendTeacherCredentialEmail(SmtpMailer $mailer, string $email, string $name, string $password, string $loginUrl): bool
+{
+    $subject = 'Teacher Account login credentials';
+    $textBody = "Hello {$name},\n\n"
+        . "Your teacher account has been created for the Teacher Portal.\n\n"
+        . "Account type: Teacher\n"
+        . "Login link: {$loginUrl}\n"
+        . "Email: {$email}\n"
+        . "Password: {$password}\n\n"
+        . "This email can also be used for a learner account with separate credentials.\n\n"
+        . "Kiwi Digital Tech";
+    $htmlBody = '<p>Hello ' . e($name) . ',</p>'
+        . '<p>Your <strong>teacher account</strong> has been created for the <strong>Teacher Portal</strong>.</p>'
+        . '<p><strong>Account type:</strong> Teacher<br>'
+        . '<strong>Login link:</strong> <a href="' . e($loginUrl) . '">' . e($loginUrl) . '</a><br>'
+        . '<strong>Email:</strong> ' . e($email) . '<br>'
+        . '<strong>Password:</strong> ' . e($password) . '</p>'
+        . '<p>This email can also be used for a learner account with separate credentials.</p>'
+        . '<p>Kiwi Digital Tech</p>';
+
+    return $mailer->send($email, $name, $subject, $htmlBody, $textBody);
+}
+
+function generateTeacherCodeFromLearner(PDO $pdo, string $learnerNumber): string
+{
+    // Teacher codes generated from learners stay readable while remaining unique.
+    $cleanLearnerNumber = trim(preg_replace('/[^A-Z0-9]+/', '-', strtoupper($learnerNumber)), '-');
+    $prefix = $cleanLearnerNumber !== '' ? 'TCH-' . $cleanLearnerNumber : 'TCH-' . date('Ymd');
+    $checkStatement = $pdo->prepare('SELECT COUNT(*) FROM teachers WHERE teacher_code = :teacher_code');
+    $candidate = substr($prefix, 0, 50);
+    $counter = 1;
+
+    while (true) {
+        $checkStatement->execute(['teacher_code' => $candidate]);
+
+        if ((int) $checkStatement->fetchColumn() === 0) {
+            return $candidate;
+        }
+
+        $suffix = '-' . str_pad((string) $counter, 2, '0', STR_PAD_LEFT);
+        $candidate = substr($prefix, 0, 50 - strlen($suffix)) . $suffix;
+        $counter++;
+    }
+}
+
+function createTeacherFromLearner(PDO $pdo, string $fullName, string $email, string $phone, string $profilePhoto, string $learnerNumber): ?array
+{
+    if ($email === '') {
+        return null;
+    }
+
+    $teacherPassword = 'Teacher@12345';
+    $existingTeacherStatement = $pdo->prepare('SELECT id, profile_photo FROM teachers WHERE email = :email LIMIT 1');
+    $existingTeacherStatement->execute(['email' => $email]);
+    $existingTeacher = $existingTeacherStatement->fetch() ?: null;
+
+    if ($existingTeacher) {
+        // Reuse the existing teacher masterlist row for this email instead of creating duplicates.
+        $teacherStatement = $pdo->prepare(
+            'UPDATE teachers
+             SET full_name = :full_name,
+                 phone = :phone,
+                 profile_photo = :profile_photo,
+                 status = :status
+             WHERE id = :id'
+        );
+        $teacherStatement->execute([
+            'full_name' => $fullName,
+            'phone' => $phone !== '' ? $phone : null,
+            'profile_photo' => $profilePhoto !== '' ? $profilePhoto : ($existingTeacher['profile_photo'] ?? null),
+            'status' => 'Active',
+            'id' => (int) $existingTeacher['id'],
+        ]);
+    } else {
+        $teacherStatement = $pdo->prepare(
+            'INSERT INTO teachers (teacher_code, full_name, email, phone, specialization, profile_photo, status)
+             VALUES (:teacher_code, :full_name, :email, :phone, :specialization, :profile_photo, :status)'
+        );
+        $teacherStatement->execute([
+            'teacher_code' => generateTeacherCodeFromLearner($pdo, $learnerNumber),
+            'full_name' => $fullName,
+            'email' => $email,
+            'phone' => $phone !== '' ? $phone : null,
+            'specialization' => 'Learner promoted to teacher',
+            'profile_photo' => $profilePhoto !== '' ? $profilePhoto : null,
+            'status' => 'Active',
+        ]);
+    }
+
+    // Teacher portal accounts are keyed by email plus role, so learner and teacher logins can share an email.
+    $userStatement = $pdo->prepare(
+        "INSERT INTO users (name, email, password_hash, role)
+         VALUES (:name, :email, :password_hash, 'teacher')
+         ON DUPLICATE KEY UPDATE
+            name = VALUES(name),
+            password_hash = VALUES(password_hash)"
+    );
+    $userStatement->execute([
+        'name' => $fullName,
+        'email' => $email,
+        'password_hash' => password_hash($teacherPassword, PASSWORD_DEFAULT),
+    ]);
+
+    return [
+        'name' => $fullName,
+        'email' => $email,
+        'password' => $teacherPassword,
+    ];
+}
+
 if (isset($_GET['edit'])) {
     $editStatement = $pdo->prepare('SELECT * FROM learners WHERE id = :id LIMIT 1');
     $editStatement->execute(['id' => (int) $_GET['edit']]);
@@ -121,10 +231,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $lastName = trim($_POST['last_name'] ?? '');
     $email = trim($_POST['email'] ?? '');
     $phone = trim($_POST['phone'] ?? '');
+    $classId = (int) ($_POST['class_id'] ?? 0);
     $status = $_POST['status'] ?? 'Active';
     $notes = trim($_POST['notes'] ?? '');
     $existingPhoto = trim($_POST['existing_photo'] ?? '');
     $profilePhoto = $existingPhoto;
+    $makeTeacher = isset($_POST['make_teacher']);
 
     if ($learnerNumber === '') {
         $errors[] = 'Learner number is required.';
@@ -142,8 +254,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $errors[] = 'Enter a valid learner email.';
     }
 
+    if ($makeTeacher && $email === '') {
+        $errors[] = 'Learner email is required to create the teacher account and send credentials.';
+    }
+
     if (!in_array($status, ['Active', 'On Hold', 'Completed'], true)) {
         $errors[] = 'Choose a valid learner status.';
+    }
+
+    if ($classId > 0) {
+        $classCheckStatement = $pdo->prepare('SELECT id FROM classes WHERE id = :id LIMIT 1');
+        $classCheckStatement->execute(['id' => $classId]);
+
+        if (!$classCheckStatement->fetch()) {
+            $errors[] = 'Choose a valid class.';
+        }
     }
 
     if (isset($_FILES['profile_photo']) && $_FILES['profile_photo']['error'] !== UPLOAD_ERR_NO_FILE) {
@@ -179,7 +304,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if (!$errors) {
         try {
+            $fullName = trim($firstName . ' ' . $lastName);
+            $teacherCredential = null;
+            $teacherEmailStatus = '';
+
             if ($id > 0) {
+                $pdo->beginTransaction();
+
                 // Update learner profile details while keeping the existing photo when no new file is uploaded.
                 $statement = $pdo->prepare(
                     'UPDATE learners
@@ -188,6 +319,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                          last_name = :last_name,
                          email = :email,
                          phone = :phone,
+                         class_id = :class_id,
                          status = :status,
                          profile_photo = :profile_photo,
                          notes = :notes
@@ -199,26 +331,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'last_name' => $lastName,
                     'email' => $email !== '' ? $email : null,
                     'phone' => $phone !== '' ? $phone : null,
+                    'class_id' => $classId > 0 ? $classId : null,
                     'status' => $status,
                     'profile_photo' => $profilePhoto !== '' ? $profilePhoto : null,
                     'notes' => $notes !== '' ? $notes : null,
                     'id' => $id,
                 ]);
 
-                header('Location: learners.php?success=updated');
+                if ($makeTeacher) {
+                    $teacherCredential = createTeacherFromLearner($pdo, $fullName, $email, $phone, $profilePhoto, $learnerNumber);
+                }
+
+                $pdo->commit();
+
+                if ($teacherCredential !== null) {
+                    $mailer = new SmtpMailer($mailerConfig);
+                    $teacherEmailSent = sendTeacherCredentialEmail($mailer, $teacherCredential['email'], $teacherCredential['name'], $teacherCredential['password'], appLoginUrl());
+                    $teacherEmailStatus = $teacherEmailSent ? 'sent' : 'failed';
+                }
+
+                $redirectUrl = 'learners.php?success=updated';
+                if ($teacherEmailStatus !== '') {
+                    $redirectUrl .= '&teacher_email=' . $teacherEmailStatus;
+                }
+
+                header('Location: ' . $redirectUrl);
                 exit;
             }
-
-            $fullName = trim($firstName . ' ' . $lastName);
 
             $pdo->beginTransaction();
 
             // Create a learner record from the Add Learner form.
             $statement = $pdo->prepare(
                 'INSERT INTO learners
-                    (learner_number, first_name, last_name, email, phone, status, profile_photo, notes)
+                    (learner_number, first_name, last_name, email, phone, class_id, status, profile_photo, notes)
                  VALUES
-                    (:learner_number, :first_name, :last_name, :email, :phone, :status, :profile_photo, :notes)'
+                    (:learner_number, :first_name, :last_name, :email, :phone, :class_id, :status, :profile_photo, :notes)'
             );
             $statement->execute([
                 'learner_number' => $learnerNumber,
@@ -226,6 +374,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'last_name' => $lastName,
                 'email' => $email !== '' ? $email : null,
                 'phone' => $phone !== '' ? $phone : null,
+                'class_id' => $classId > 0 ? $classId : null,
                 'status' => $status,
                 'profile_photo' => $profilePhoto !== '' ? $profilePhoto : null,
                 'notes' => $notes !== '' ? $notes : null,
@@ -243,8 +392,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                      VALUES (:name, :email, :password_hash, :role)
                      ON DUPLICATE KEY UPDATE
                         name = VALUES(name),
-                        password_hash = VALUES(password_hash),
-                        role = VALUES(role)'
+                        password_hash = VALUES(password_hash)'
                 );
                 $userStatement->execute([
                     'name' => $fullName,
@@ -252,6 +400,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'password_hash' => $passwordHash,
                     'role' => 'learner',
                 ]);
+            }
+
+            if ($makeTeacher) {
+                $teacherCredential = createTeacherFromLearner($pdo, $fullName, $email, $phone, $profilePhoto, $learnerNumber);
             }
 
             $pdo->commit();
@@ -262,7 +414,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $emailStatus = $emailSent ? 'sent' : 'failed';
             }
 
-            header('Location: learners.php?success=created&email=' . $emailStatus);
+            if ($teacherCredential !== null) {
+                $mailer = isset($mailer) ? $mailer : new SmtpMailer($mailerConfig);
+                $teacherEmailSent = sendTeacherCredentialEmail($mailer, $teacherCredential['email'], $teacherCredential['name'], $teacherCredential['password'], appLoginUrl());
+                $teacherEmailStatus = $teacherEmailSent ? 'sent' : 'failed';
+            }
+
+            $redirectUrl = 'learners.php?success=created&email=' . $emailStatus;
+            if ($teacherEmailStatus !== '') {
+                $redirectUrl .= '&teacher_email=' . $teacherEmailStatus;
+            }
+
+            header('Location: ' . $redirectUrl);
             exit;
         } catch (PDOException $exception) {
             if ($pdo->inTransaction()) {
@@ -280,26 +443,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         'last_name' => $lastName,
         'email' => $email,
         'phone' => $phone,
+        'class_id' => $classId,
         'status' => $status,
         'profile_photo' => $profilePhoto,
         'notes' => $notes,
+        'make_teacher' => $makeTeacher,
     ];
 }
 
-$classes = $pdo->query('SELECT id, class_name, section FROM classes ORDER BY class_name, section')->fetchAll();
-
 if ($search !== '') {
-    // Search covers core learner identity fields and class labels.
+    // Search covers the visible learner identity fields.
     $learnersStatement = $pdo->prepare(
-        "SELECT learners.*, classes.class_name, classes.section
+        "SELECT learners.*
          FROM learners
-         LEFT JOIN classes ON classes.id = learners.class_id
          WHERE learners.learner_number LIKE :learner_number_search
             OR learners.first_name LIKE :first_name_search
             OR learners.last_name LIKE :last_name_search
-            OR learners.email LIKE :email_search
-            OR classes.class_name LIKE :class_name_search
-            OR classes.section LIKE :section_search
          ORDER BY learners.created_at DESC, learners.id DESC"
     );
     $searchTerm = '%' . $search . '%';
@@ -307,20 +466,17 @@ if ($search !== '') {
         'learner_number_search' => $searchTerm,
         'first_name_search' => $searchTerm,
         'last_name_search' => $searchTerm,
-        'email_search' => $searchTerm,
-        'class_name_search' => $searchTerm,
-        'section_search' => $searchTerm,
     ]);
 } else {
     $learnersStatement = $pdo->query(
-        'SELECT learners.*, classes.class_name, classes.section
+        'SELECT learners.*
          FROM learners
-         LEFT JOIN classes ON classes.id = learners.class_id
          ORDER BY learners.created_at DESC, learners.id DESC'
     );
 }
 
 $learnerRows = $learnersStatement->fetchAll();
+$classes = $pdo->query('SELECT id, class_name FROM classes ORDER BY class_name')->fetchAll();
 $formLearner = $editingLearner ?: [
     'id' => 0,
     'learner_number' => '',
@@ -328,9 +484,11 @@ $formLearner = $editingLearner ?: [
     'last_name' => '',
     'email' => '',
     'phone' => '',
+    'class_id' => 0,
     'status' => 'Active',
     'profile_photo' => '',
     'notes' => '',
+    'make_teacher' => false,
 ];
 $successMessages = [
     'created' => 'Learner added successfully.',
@@ -338,6 +496,7 @@ $successMessages = [
     'deleted' => 'Learner deleted successfully.',
 ];
 $emailStatus = $_GET['email'] ?? '';
+$teacherEmailStatus = $_GET['teacher_email'] ?? '';
 $toastIcon = '';
 $toastTitle = '';
 $toastText = '';
@@ -358,6 +517,13 @@ if ($errors) {
     } elseif ($emailStatus === 'skipped') {
         $toastIcon = 'info';
         $toastText = 'Learner was added without login credentials because no email was provided.';
+    }
+
+    if ($teacherEmailStatus === 'sent') {
+        $toastText = trim($toastText . "\nTeacher account was created and teacher credentials were emailed.");
+    } elseif ($teacherEmailStatus === 'failed') {
+        $toastIcon = 'warning';
+        $toastText = trim($toastText . "\nTeacher account was created, but the teacher credential email could not be sent.");
     }
 }
 ?>
@@ -388,12 +554,10 @@ if ($errors) {
         </span>
       </a>
       <nav class="sidebar-nav">
-        <a href="dashboard.php"><i class="fa-solid fa-grid-2"></i> Dashboard</a>
+        <a href="dashboard.php"><i class="fa-solid fa-gauge-high"></i> Dashboard</a>
         <a href="classes.php"><i class="fa-solid fa-chalkboard-user"></i> Classes</a>
+        <a href="teachers.php"><i class="fa-solid fa-user-tie"></i> Teachers</a>
         <a class="active" href="learners.php"><i class="fa-solid fa-users"></i> Learners</a>
-        <a href="enrollments.php"><i class="fa-solid fa-book-open-reader"></i> Enrollments</a>
-        <a href="#"><i class="fa-solid fa-chart-simple"></i> Reports</a>
-        <a href="#"><i class="fa-solid fa-gear"></i> Settings</a>
       </nav>
       <div class="sidebar-footer">
         <p class="mb-1">Logged in as</p>
@@ -440,7 +604,7 @@ if ($errors) {
               <form method="get" class="search-bar mb-4">
                 <div class="input-group">
                   <span class="input-group-text"><i class="fa-solid fa-magnifying-glass"></i></span>
-                  <input type="search" class="form-control" name="search" value="<?php echo e($search); ?>" placeholder="Search learners, class, section, or email">
+                  <input type="search" class="form-control" name="search" value="<?php echo e($search); ?>" placeholder="Search learners or number">
                   <button type="submit" class="btn btn-primary">Search</button>
                   <?php if ($search !== ''): ?>
                     <a href="learners.php" class="btn btn-outline-secondary">Clear</a>
@@ -471,21 +635,22 @@ if ($errors) {
                       <div class="learner-rate"><?php echo $progress; ?>%</div>
                       <div class="learner-card-media">
                         <?php if ($photo !== ''): ?>
-                          <img src="<?php echo e($photo); ?>" alt="<?php echo e($fullName); ?>">
+                          <button type="button" class="learner-photo-viewer-button" data-bs-toggle="modal" data-bs-target="#learnerPhotoModal" data-photo="<?php echo e($photo); ?>" data-name="<?php echo e($fullName); ?>" aria-label="View <?php echo e($fullName); ?> profile picture">
+                            <img src="<?php echo e($photo); ?>" alt="<?php echo e($fullName); ?>">
+                          </button>
                         <?php else: ?>
                           <div class="learner-photo-placeholder"><?php echo e($initials); ?></div>
                         <?php endif; ?>
                       </div>
                       <h3><?php echo e($fullName); ?></h3>
                       <p class="learner-number"><?php echo e($learner['learner_number']); ?></p>
+                      <?php if (!empty($learner['phone'])): ?>
                       <div class="learner-meta">
-                        <?php if (!empty($learner['email'])): ?>
-                          <span><i class="fa-regular fa-envelope"></i><?php echo e($learner['email']); ?></span>
-                        <?php endif; ?>
                         <?php if (!empty($learner['phone'])): ?>
                           <span><i class="fa-solid fa-phone"></i><?php echo e($learner['phone']); ?></span>
                         <?php endif; ?>
                       </div>
+                      <?php endif; ?>
                     </div>
                     <footer class="learner-card-footer">
                       <div class="d-flex align-items-center justify-content-between mb-2">
@@ -514,6 +679,20 @@ if ($errors) {
         </div>
       </section>
     </main>
+  </div>
+
+  <div class="modal fade" id="learnerPhotoModal" tabindex="-1" aria-labelledby="learnerPhotoModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+      <div class="modal-content image-preview-modal">
+        <div class="modal-header">
+          <h2 class="modal-title h5" id="learnerPhotoModalLabel">Profile picture</h2>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <img src="" alt="" id="learnerPhotoPreview">
+        </div>
+      </div>
+    </div>
   </div>
 
   <div class="modal fade" id="learnerModal" tabindex="-1" aria-labelledby="learnerModalLabel" aria-hidden="true">
@@ -570,6 +749,22 @@ if ($errors) {
                   <option value="Completed" <?php echo $formLearner['status'] === 'Completed' ? 'selected' : ''; ?>>Completed</option>
                 </select>
               </div>
+              <div class="col-md-6">
+                <label class="form-label" for="class_id">Class</label>
+                <select class="form-select" id="class_id" name="class_id">
+                  <option value="">Unassigned</option>
+                  <?php foreach ($classes as $class): ?>
+                    <option value="<?php echo (int) $class['id']; ?>" <?php echo (int) ($formLearner['class_id'] ?? 0) === (int) $class['id'] ? 'selected' : ''; ?>>
+                      <?php echo e($class['class_name']); ?>
+                    </option>
+                  <?php endforeach; ?>
+                </select>
+              </div>
+            </div>
+            <div class="form-check teacher-convert-check mt-3">
+              <input class="form-check-input" type="checkbox" id="make_teacher" name="make_teacher" value="1" <?php echo !empty($formLearner['make_teacher']) ? 'checked' : ''; ?>>
+              <label class="form-check-label fw-semibold" for="make_teacher">Make this learner a teacher as well</label>
+              <div class="form-text">Creates a teacher masterlist record and sends separate Teacher Portal login credentials.</div>
             </div>
             <div class="mt-3">
               <label class="form-label" for="notes">Notes</label>
@@ -609,6 +804,6 @@ if ($errors) {
       });
     </script>
   <?php endif; ?>
-  <script src="js/app.js"></script>
+  <script src="js/app.js?v=photo-viewer"></script>
 </body>
 </html>

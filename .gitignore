@@ -1,3 +1,15 @@
 .DS_Store
 uploads/learners/*
 !uploads/learners/.gitkeep
+uploads/courses/*
+!uploads/courses/.gitkeep
+uploads/classes/*
+!uploads/classes/.gitkeep
+uploads/teachers/*
+!uploads/teachers/.gitkeep
+uploads/materials/*
+!uploads/materials/.gitkeep
+uploads/assignments/*
+!uploads/assignments/.gitkeep
+uploads/submissions/*
+!uploads/submissions/.gitkeep

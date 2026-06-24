@@ -3,7 +3,7 @@
 require_once __DIR__ . '/includes/bootstrap.php';
 
 if ($auth->check()) {
-    header('Location: dashboard.php');
+    header('Location: ' . $auth->redirectPath());
     exit;
 }
 
@@ -14,7 +14,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $password = $_POST['password'] ?? '';
 
     if ($auth->attempt($email, $password)) {
-        header('Location: dashboard.php');
+        header('Location: ' . $auth->redirectPath());
         exit;
     }
 
@@ -56,7 +56,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
           <div class="mb-4">
             <span class="section-kicker">Sign in</span>
             <h2 class="h3 fw-bold mb-1">Access your dashboard</h2>
-            <p class="text-secondary mb-0">Use your administrator credentials to continue.</p>
+            <p class="text-secondary mb-0">Use your account credentials to continue.</p>
           </div>
 
           <?php if ($error): ?>
@@ -68,7 +68,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
               <label class="form-label" for="email">Email address</label>
               <div class="input-group input-group-lg">
                 <span class="input-group-text"><i class="fa-regular fa-envelope"></i></span>
-                <!-- Match the seeded admin account from database/schema.sql for local setup. -->
+                <!-- Pre-fill the seeded admin account for quick local testing. -->
                 <input type="email" class="form-control" id="email" name="email" value="admin@learnersprogress.local" required autocomplete="email">
               </div>
             </div>
