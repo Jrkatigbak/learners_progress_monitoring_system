@@ -698,9 +698,9 @@ body {
 }
 
 .learner-card-media {
-  width: 82px;
-  height: 82px;
-  margin: 22px auto 12px;
+  width: 164px;
+  height: 164px;
+  margin: 28px auto 16px;
   overflow: hidden;
   border-radius: 50%;
   border: 4px solid #fff;

@@ -524,7 +524,7 @@ if ($errors) {
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=modal-scroll" rel="stylesheet">
+  <link href="css/style.css?v=learner-card-clean" rel="stylesheet">
 </head>
 <body class="dashboard-page">
   <div class="app-layout">
@@ -613,10 +613,6 @@ if ($errors) {
                   ?>
                   <article class="learner-card">
                     <div class="learner-card-body">
-                      <span class="learner-status-pill <?php echo $learner['status'] === 'Completed' ? 'is-completed' : ($learner['status'] === 'On Hold' ? 'is-hold' : 'is-active'); ?>">
-                        <?php echo e($learner['status']); ?>
-                      </span>
-                      <div class="learner-rate"><?php echo $progress; ?>%</div>
                       <div class="learner-card-media">
                         <?php if ($photo !== ''): ?>
                           <button type="button" class="learner-photo-viewer-button" data-bs-toggle="modal" data-bs-target="#learnerPhotoModal" data-photo="<?php echo e($photo); ?>" data-name="<?php echo e($fullName); ?>" aria-label="View <?php echo e($fullName); ?> profile picture">
