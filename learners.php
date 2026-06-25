@@ -231,7 +231,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $lastName = trim($_POST['last_name'] ?? '');
     $email = trim($_POST['email'] ?? '');
     $phone = trim($_POST['phone'] ?? '');
-    $classId = (int) ($_POST['class_id'] ?? 0);
     $status = $_POST['status'] ?? 'Active';
     $notes = trim($_POST['notes'] ?? '');
     $existingPhoto = trim($_POST['existing_photo'] ?? '');
@@ -260,15 +259,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if (!in_array($status, ['Active', 'On Hold', 'Completed'], true)) {
         $errors[] = 'Choose a valid learner status.';
-    }
-
-    if ($classId > 0) {
-        $classCheckStatement = $pdo->prepare('SELECT id FROM classes WHERE id = :id LIMIT 1');
-        $classCheckStatement->execute(['id' => $classId]);
-
-        if (!$classCheckStatement->fetch()) {
-            $errors[] = 'Choose a valid class.';
-        }
     }
 
     if (isset($_FILES['profile_photo']) && $_FILES['profile_photo']['error'] !== UPLOAD_ERR_NO_FILE) {
@@ -319,7 +309,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                          last_name = :last_name,
                          email = :email,
                          phone = :phone,
-                         class_id = :class_id,
                          status = :status,
                          profile_photo = :profile_photo,
                          notes = :notes
@@ -331,7 +320,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'last_name' => $lastName,
                     'email' => $email !== '' ? $email : null,
                     'phone' => $phone !== '' ? $phone : null,
-                    'class_id' => $classId > 0 ? $classId : null,
                     'status' => $status,
                     'profile_photo' => $profilePhoto !== '' ? $profilePhoto : null,
                     'notes' => $notes !== '' ? $notes : null,
@@ -364,9 +352,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // Create a learner record from the Add Learner form.
             $statement = $pdo->prepare(
                 'INSERT INTO learners
-                    (learner_number, first_name, last_name, email, phone, class_id, status, profile_photo, notes)
+                    (learner_number, first_name, last_name, email, phone, status, profile_photo, notes)
                  VALUES
-                    (:learner_number, :first_name, :last_name, :email, :phone, :class_id, :status, :profile_photo, :notes)'
+                    (:learner_number, :first_name, :last_name, :email, :phone, :status, :profile_photo, :notes)'
             );
             $statement->execute([
                 'learner_number' => $learnerNumber,
@@ -374,7 +362,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'last_name' => $lastName,
                 'email' => $email !== '' ? $email : null,
                 'phone' => $phone !== '' ? $phone : null,
-                'class_id' => $classId > 0 ? $classId : null,
                 'status' => $status,
                 'profile_photo' => $profilePhoto !== '' ? $profilePhoto : null,
                 'notes' => $notes !== '' ? $notes : null,
@@ -443,7 +430,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         'last_name' => $lastName,
         'email' => $email,
         'phone' => $phone,
-        'class_id' => $classId,
         'status' => $status,
         'profile_photo' => $profilePhoto,
         'notes' => $notes,
@@ -476,7 +462,6 @@ if ($search !== '') {
 }
 
 $learnerRows = $learnersStatement->fetchAll();
-$classes = $pdo->query('SELECT id, class_name FROM classes ORDER BY class_name')->fetchAll();
 $formLearner = $editingLearner ?: [
     'id' => 0,
     'learner_number' => '',
@@ -484,7 +469,6 @@ $formLearner = $editingLearner ?: [
     'last_name' => '',
     'email' => '',
     'phone' => '',
-    'class_id' => 0,
     'status' => 'Active',
     'profile_photo' => '',
     'notes' => '',
@@ -540,7 +524,7 @@ if ($errors) {
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css" rel="stylesheet">
+  <link href="css/style.css?v=modal-scroll" rel="stylesheet">
 </head>
 <body class="dashboard-page">
   <div class="app-layout">
@@ -747,17 +731,6 @@ if ($errors) {
                   <option value="Active" <?php echo $formLearner['status'] === 'Active' ? 'selected' : ''; ?>>Active</option>
                   <option value="On Hold" <?php echo $formLearner['status'] === 'On Hold' ? 'selected' : ''; ?>>On Hold</option>
                   <option value="Completed" <?php echo $formLearner['status'] === 'Completed' ? 'selected' : ''; ?>>Completed</option>
-                </select>
-              </div>
-              <div class="col-md-6">
-                <label class="form-label" for="class_id">Class</label>
-                <select class="form-select" id="class_id" name="class_id">
-                  <option value="">Unassigned</option>
-                  <?php foreach ($classes as $class): ?>
-                    <option value="<?php echo (int) $class['id']; ?>" <?php echo (int) ($formLearner['class_id'] ?? 0) === (int) $class['id'] ? 'selected' : ''; ?>>
-                      <?php echo e($class['class_name']); ?>
-                    </option>
-                  <?php endforeach; ?>
                 </select>
               </div>
             </div>

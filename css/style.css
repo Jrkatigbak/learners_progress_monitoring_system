@@ -1680,28 +1680,37 @@ body {
   border-radius: 16px;
 }
 
-#classModal .modal-dialog {
+#classModal .modal-dialog,
+#learnerModal .modal-dialog {
+  height: calc(100vh - 32px);
   max-height: calc(100vh - 32px);
+  margin-top: 16px;
+  margin-bottom: 16px;
 }
 
-#classModal .modal-content {
-  max-height: calc(100vh - 32px);
+#classModal .modal-content,
+#learnerModal .modal-content {
+  height: 100%;
+  max-height: 100%;
   overflow: hidden;
 }
 
-#classModal .module-form {
+#classModal .module-form,
+#learnerModal .module-form {
   display: flex;
   min-height: 0;
   flex: 1;
   flex-direction: column;
 }
 
-#classModal .modal-body {
+#classModal .modal-body,
+#learnerModal .modal-body {
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
 }
 
-#classModal .modal-footer {
+#classModal .modal-footer,
+#learnerModal .modal-footer {
   flex-shrink: 0;
   background: var(--surface);
   border-top-color: var(--line);
