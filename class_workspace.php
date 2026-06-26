@@ -1,6 +1,9 @@
 <?php
 
 require_once __DIR__ . '/includes/auth_guard.php';
+require_once __DIR__ . '/classes/SmtpMailer.php';
+
+$mailerConfig = require __DIR__ . '/config/Mailer.php';
 
 // Class workspace keeps learners, tasks, grades, materials, quizzes, and assignments inside one selected class.
 function e(string $value): string
@@ -63,6 +66,45 @@ function deleteAssignmentFile(string $filePath): void
     if (is_file($fullPath)) {
         unlink($fullPath);
     }
+}
+
+function generateLearnerPassword(): string
+{
+    // Reset passwords stay temporary-looking and hard to guess before the learner changes them.
+    return 'Kiwi-' . bin2hex(random_bytes(3)) . '-' . random_int(100, 999);
+}
+
+function classWorkspaceLoginUrl(): string
+{
+    // Build the login URL from the current request host so localhost and the live domain both send the right link.
+    $isHttps = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+        || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https');
+    $scheme = $isHttps ? 'https' : 'http';
+    $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
+    $basePath = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '')), '/');
+
+    return $scheme . '://' . $host . ($basePath ? $basePath : '') . '/login.php';
+}
+
+function sendClassLearnerCredentialEmail(SmtpMailer $mailer, string $email, string $name, string $password, string $loginUrl): bool
+{
+    $subject = 'Learners Progress Monitoring System login credentials';
+    $textBody = "Hello {$name},\n\n"
+        . "Your Learners Progress Monitoring System login credentials were reset.\n\n"
+        . "Login link: {$loginUrl}\n"
+        . "Email: {$email}\n"
+        . "Password: {$password}\n\n"
+        . "Please keep these credentials secure.\n\n"
+        . "Kiwi Digital Tech";
+    $htmlBody = '<p>Hello ' . e($name) . ',</p>'
+        . '<p>Your <strong>Learners Progress Monitoring System</strong> login credentials were reset.</p>'
+        . '<p><strong>Login link:</strong> <a href="' . e($loginUrl) . '">' . e($loginUrl) . '</a><br>'
+        . '<strong>Email:</strong> ' . e($email) . '<br>'
+        . '<strong>Password:</strong> ' . e($password) . '</p>'
+        . '<p>Please keep these credentials secure.</p>'
+        . '<p>Kiwi Digital Tech</p>';
+
+    return $mailer->send($email, $name, $subject, $htmlBody, $textBody);
 }
 
 function classCourseId(PDO $pdo, array $class): int
@@ -257,6 +299,71 @@ $courseId = classCourseId($pdo, $class);
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
+
+    if ($action === 'reset_learner_credentials') {
+        $learnerId = (int) ($_POST['learner_id'] ?? 0);
+
+        if (!$isAdmin) {
+            $errors[] = 'Only administrators can reset learner credentials.';
+        }
+
+        $learnerStatement = $pdo->prepare(
+            'SELECT DISTINCT learners.*
+             FROM learners
+             LEFT JOIN course_enrollments
+                ON course_enrollments.learner_id = learners.id
+               AND course_enrollments.course_id = :course_id
+             WHERE learners.id = :learner_id
+               AND (
+                    learners.class_id = :class_id
+                    OR course_enrollments.enrollment_status IN ("Enrolled", "In Progress", "Completed")
+               )
+             LIMIT 1'
+        );
+        $learnerStatement->execute([
+            'learner_id' => $learnerId,
+            'class_id' => $classId,
+            'course_id' => $courseId,
+        ]);
+        $learnerCredential = $learnerStatement->fetch() ?: null;
+
+        if (!$learnerCredential) {
+            $errors[] = 'Select a valid learner from this class.';
+        }
+
+        $learnerEmail = trim((string) ($learnerCredential['email'] ?? ''));
+        $learnerName = $learnerCredential ? trim((string) $learnerCredential['first_name'] . ' ' . (string) $learnerCredential['last_name']) : '';
+
+        if ($learnerEmail === '' || !filter_var($learnerEmail, FILTER_VALIDATE_EMAIL)) {
+            $errors[] = 'Learner needs a valid email before credentials can be resent.';
+        }
+
+        if (!$errors) {
+            $learnerPassword = generateLearnerPassword();
+            $userStatement = $pdo->prepare(
+                'INSERT INTO users (name, email, password_hash, role)
+                 VALUES (:name, :email, :password_hash, :role)
+                 ON DUPLICATE KEY UPDATE
+                    name = VALUES(name),
+                    password_hash = VALUES(password_hash)'
+            );
+            $userStatement->execute([
+                'name' => $learnerName,
+                'email' => $learnerEmail,
+                'password_hash' => password_hash($learnerPassword, PASSWORD_DEFAULT),
+                'role' => 'learner',
+            ]);
+
+            $mailer = new SmtpMailer($mailerConfig);
+            $emailSent = sendClassLearnerCredentialEmail($mailer, $learnerEmail, $learnerName, $learnerPassword, classWorkspaceLoginUrl());
+            $emailStatus = $emailSent ? 'sent' : 'failed';
+
+            header('Location: class_workspace.php?class_id=' . $classId . '&tool=learners&success=learner_credentials_reset&credential_email=' . $emailStatus);
+            exit;
+        }
+
+        $tool = 'learners';
+    }
 
     if ($action === 'add_class_learners') {
         $selectedLearnerIds = array_map('intval', $_POST['learner_ids'] ?? []);
@@ -1419,6 +1526,7 @@ $teacherInitials = $teacherName !== '' ? strtoupper(substr($teacherName, 0, 1)) 
 
 $successMessages = [
     'learners_added' => 'Learners added successfully.',
+    'learner_credentials_reset' => 'Learner credentials were reset.',
     'topic_created' => 'Topic added successfully.',
     'topic_updated' => 'Topic updated successfully.',
     'topic_deleted' => 'Topic deleted successfully.',
@@ -1435,6 +1543,7 @@ $successMessages = [
     'task_deleted' => 'Grade deleted successfully.',
     'grades_saved' => 'Grades saved successfully.',
 ];
+$credentialEmailStatus = $_GET['credential_email'] ?? '';
 ?>
 <!doctype html>
 <html lang="en">
@@ -1449,7 +1558,7 @@ $successMessages = [
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=topics-organizer" rel="stylesheet">
+  <link href="css/style.css?v=learner-credential-reset" rel="stylesheet">
 </head>
 <body class="dashboard-page class-workspace-page class-workspace-<?php echo e($tool); ?>">
   <div class="app-layout">
@@ -1506,6 +1615,14 @@ $successMessages = [
       <section class="content-wrap">
         <?php if (isset($successMessages[$success])): ?>
           <div class="alert alert-success" role="alert"><?php echo e($successMessages[$success]); ?></div>
+        <?php endif; ?>
+
+        <?php if (in_array($credentialEmailStatus, ['sent', 'failed'], true)): ?>
+          <div class="alert <?php echo $credentialEmailStatus === 'sent' ? 'alert-info' : 'alert-warning'; ?>" role="alert">
+            <?php echo $credentialEmailStatus === 'sent'
+                ? 'The new learner credentials were emailed successfully.'
+                : 'The learner password was reset, but the credential email could not be sent.'; ?>
+          </div>
         <?php endif; ?>
 
         <?php if ($errors): ?>
@@ -1630,6 +1747,17 @@ $successMessages = [
                   <article class="learner-card">
                     <div class="learner-card-body">
                       <span class="learner-status-pill <?php echo $learner['status'] === 'Completed' ? 'is-completed' : ($learner['status'] === 'On Hold' ? 'is-hold' : 'is-active'); ?>"><?php echo e($learner['status']); ?></span>
+                      <?php if ($isAdmin): ?>
+                        <form method="post" class="learner-card-reset-form" onsubmit="return confirm('Reset password and email new login credentials to this learner?');">
+                          <input type="hidden" name="action" value="reset_learner_credentials">
+                          <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
+                          <input type="hidden" name="tool" value="learners">
+                          <input type="hidden" name="learner_id" value="<?php echo (int) $learner['id']; ?>">
+                          <button type="submit" class="learner-icon-button" aria-label="Reset and resend login credentials" title="Reset and resend credentials">
+                            <i class="fa-solid fa-key"></i>
+                          </button>
+                        </form>
+                      <?php endif; ?>
                       <div class="learner-card-media">
                         <?php if (!empty($learner['profile_photo'])): ?>
                           <button type="button" class="learner-photo-viewer-button" data-bs-toggle="modal" data-bs-target="#learnerPhotoModal" data-photo="<?php echo e($learner['profile_photo']); ?>" data-name="<?php echo e($fullName); ?>" aria-label="View <?php echo e($fullName); ?> profile picture">
@@ -1986,10 +2114,15 @@ $successMessages = [
                 <p>No class topics yet.</p>
               </div>
             <?php else: ?>
+              <div class="input-group mb-4">
+                <span class="input-group-text"><i class="fa-solid fa-magnifying-glass"></i></span>
+                <input type="search" class="form-control" id="topicSearchInput" placeholder="Search topics">
+              </div>
               <div class="material-folder-grid mb-5">
                 <?php foreach ($materialFolders as $folder): ?>
                   <?php $topicTotalCount = (int) $folder['material_count'] + (int) $folder['quiz_count'] + (int) $folder['assignment_count'] + (int) ($folder['grade_item_count'] ?? 0); ?>
-                  <article class="material-folder-card">
+                  <?php $topicSearchText = strtolower(trim($folder['name'] . ' ' . ($folder['description'] ?? ''))); ?>
+                  <article class="material-folder-card topic-search-card" data-topic-search="<?php echo e($topicSearchText); ?>">
                     <a class="material-folder-link" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=materials&topic_id=<?php echo (int) $folder['id']; ?>">
                       <span class="material-folder-icon"><i class="fa-solid fa-folder"></i></span>
                       <span>
@@ -2015,60 +2148,11 @@ $successMessages = [
                   </article>
                 <?php endforeach; ?>
               </div>
-            <?php endif; ?>
-
-            <div class="d-flex flex-wrap align-items-center justify-content-between gap-3 mb-4">
-              <div>
-                <span class="section-kicker">Grades</span>
-                <h2 class="h5 mb-0">Grade items</h2>
+              <div class="empty-state d-none" id="topicSearchNoResults">
+                <i class="fa-solid fa-magnifying-glass"></i>
+                <p>No topics match your search.</p>
               </div>
-              <button type="button" class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#taskModal">
-                <i class="fa-solid fa-plus me-2"></i>Add Grade
-              </button>
-            </div>
-            <div class="table-responsive">
-              <table class="table align-middle">
-                <thead>
-                  <tr>
-                    <th>Grade</th>
-                    <th>Topic</th>
-                    <th>Date</th>
-                    <th>Grades</th>
-                    <th>Average</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <?php if (!$tasks): ?>
-                    <tr><td colspan="6" class="text-center text-secondary py-5">No grade items yet.</td></tr>
-                  <?php endif; ?>
-                  <?php foreach ($tasks as $taskRow): ?>
-                    <tr>
-                      <td>
-                        <strong><?php echo e($taskRow['task_title']); ?></strong>
-                        <?php if (!empty($taskRow['description'])): ?>
-                          <br><span class="text-secondary small"><?php echo e($taskRow['description']); ?></span>
-                        <?php endif; ?>
-                      </td>
-                      <td><?php echo !empty($taskRow['topic_name']) ? e($taskRow['topic_name']) : '<span class="text-secondary">Unassigned</span>'; ?></td>
-                      <td><?php echo e(date('M d, Y', strtotime($taskRow['task_date']))); ?></td>
-                      <td><?php echo (int) $taskRow['grade_count']; ?></td>
-                      <td><?php echo number_format((float) $taskRow['average_score'], 2); ?></td>
-                      <td class="text-end">
-                        <a class="btn btn-sm btn-outline-primary" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=grades&task_id=<?php echo (int) $taskRow['id']; ?>">Manage Grades</a>
-	                        <form method="post" class="d-inline" onsubmit="return confirm('Delete this topic and its grades?');">
-                          <input type="hidden" name="action" value="delete_task">
-                          <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
-                          <input type="hidden" name="tool" value="tasks">
-                          <input type="hidden" name="task_id" value="<?php echo (int) $taskRow['id']; ?>">
-                          <button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>
-                        </form>
-                      </td>
-                    </tr>
-                  <?php endforeach; ?>
-                </tbody>
-              </table>
-            </div>
+            <?php endif; ?>
           </div>
         <?php endif; ?>
 
@@ -2167,19 +2251,11 @@ $successMessages = [
             <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
             <input type="hidden" name="tool" value="learners">
             <div class="row g-3 mb-4">
-              <div class="col-lg-8">
+              <div class="col-12">
                 <div class="input-group">
                   <span class="input-group-text"><i class="fa-solid fa-magnifying-glass"></i></span>
                   <input type="search" class="form-control" id="classLearnerSearch" placeholder="Search learner name, number, email, or phone">
                 </div>
-              </div>
-              <div class="col-lg-4">
-                <select class="form-select" id="classLearnerStatusFilter" aria-label="Filter learners by status">
-                  <option value="">All statuses</option>
-                  <option value="active">Active</option>
-                  <option value="on hold">On Hold</option>
-                  <option value="completed">Completed</option>
-                </select>
               </div>
             </div>
 
@@ -2194,10 +2270,9 @@ $successMessages = [
                   <?php
                     $availableName = trim($availableLearner['first_name'] . ' ' . $availableLearner['last_name']);
                     $availableInitials = strtoupper(substr($availableLearner['first_name'], 0, 1) . substr($availableLearner['last_name'], 0, 1));
-                    $availableStatus = strtolower((string) $availableLearner['status']);
                     $availableSearch = strtolower(trim($availableName . ' ' . $availableLearner['learner_number'] . ' ' . ($availableLearner['email'] ?? '') . ' ' . ($availableLearner['phone'] ?? '')));
                   ?>
-                  <label class="class-learner-picker-card" data-search="<?php echo e($availableSearch); ?>" data-status="<?php echo e($availableStatus); ?>">
+                  <label class="class-learner-picker-card" data-search="<?php echo e($availableSearch); ?>">
                     <input type="checkbox" name="learner_ids[]" value="<?php echo (int) $availableLearner['id']; ?>">
                     <span class="class-learner-picker-photo">
                       <?php if (!empty($availableLearner['profile_photo'])): ?>
@@ -2213,7 +2288,6 @@ $successMessages = [
                         <small><?php echo e($availableLearner['email']); ?></small>
                       <?php endif; ?>
                     </span>
-                    <span class="class-learner-picker-status"><?php echo e($availableLearner['status']); ?></span>
                   </label>
                 <?php endforeach; ?>
               </div>
@@ -2840,6 +2914,6 @@ $successMessages = [
       }
     })();
   </script>
-  <script src="js/app.js?v=quiz-question-builder-fix"></script>
+  <script src="js/app.js?v=topic-search-only"></script>
 </body>
 </html>

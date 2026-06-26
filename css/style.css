@@ -694,7 +694,28 @@ body {
 }
 
 .learner-card-body {
+  position: relative;
   padding: 12px 16px 14px;
+}
+
+.learner-card-reset-form {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 2;
+  margin: 0;
+}
+
+.learner-card-reset-form .learner-icon-button {
+  color: #2e7d32;
+  border-color: rgba(46, 125, 50, 0.26);
+  background: rgba(46, 125, 50, 0.08);
+}
+
+.learner-card-reset-form .learner-icon-button:hover {
+  color: #fff;
+  border-color: #2e7d32;
+  background: #2e7d32;
 }
 
 .learner-card-media {
@@ -1608,10 +1629,10 @@ body {
   position: relative;
   min-width: 0;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
   gap: 12px;
-  padding: 12px;
+  padding: 12px 46px 12px 12px;
   border: 1px solid var(--line);
   border-radius: 16px;
   cursor: pointer;
@@ -1621,15 +1642,25 @@ body {
 
 .class-learner-picker-card:hover,
 .class-learner-picker-card:has(input:checked) {
-  border-color: rgba(245, 130, 32, 0.5);
+  border-color: rgba(46, 125, 50, 0.55);
   box-shadow: 0 14px 30px var(--shadow);
   transform: translateY(-2px);
 }
 
 .class-learner-picker-card input {
   position: absolute;
-  top: 12px;
-  right: 12px;
+  top: 14px;
+  right: 14px;
+  width: 24px;
+  height: 24px;
+  margin: 0;
+  cursor: pointer;
+  accent-color: #2e7d32;
+}
+
+.class-learner-picker-card input:focus-visible {
+  outline: 3px solid rgba(46, 125, 50, 0.28);
+  outline-offset: 3px;
 }
 
 .class-learner-picker-photo {
@@ -1673,16 +1704,6 @@ body {
 .class-learner-picker-info small {
   color: var(--muted);
   font-size: 0.76rem;
-}
-
-.class-learner-picker-status {
-  align-self: end;
-  padding: 4px 9px;
-  border-radius: 999px;
-  color: var(--green);
-  font-size: 0.68rem;
-  font-weight: 800;
-  background: rgba(76, 143, 23, 0.13);
 }
 
 .table-actions {

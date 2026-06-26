@@ -73,19 +73,16 @@ $(function () {
 
   function updateClassLearnerPicker() {
     var keyword = ($('#classLearnerSearch').val() || '').toLowerCase().trim();
-    var status = ($('#classLearnerStatusFilter').val() || '').toLowerCase();
     var visibleCount = 0;
     var selectedCount = 0;
 
     $('.class-learner-picker-card').each(function () {
       var $card = $(this);
       var matchesKeyword = keyword === '' || ($card.attr('data-search') || '').indexOf(keyword) !== -1;
-      var matchesStatus = status === '' || ($card.attr('data-status') || '') === status;
-      var isVisible = matchesKeyword && matchesStatus;
 
-      $card.toggleClass('d-none', !isVisible);
+      $card.toggleClass('d-none', !matchesKeyword);
 
-      if (isVisible) {
+      if (matchesKeyword) {
         visibleCount++;
       }
 
@@ -98,9 +95,30 @@ $(function () {
     $('#classLearnerSelectedCount').text(selectedCount + ' selected');
   }
 
-  $('#classLearnerSearch, #classLearnerStatusFilter').on('input change', updateClassLearnerPicker);
+  $('#classLearnerSearch').on('input', updateClassLearnerPicker);
   $(document).on('change', '.class-learner-picker-card input[type="checkbox"]', updateClassLearnerPicker);
   updateClassLearnerPicker();
+
+  function updateTopicSearch() {
+    var keyword = ($('#topicSearchInput').val() || '').toLowerCase().trim();
+    var visibleCount = 0;
+
+    $('.topic-search-card').each(function () {
+      var $card = $(this);
+      var matchesKeyword = keyword === '' || ($card.attr('data-topic-search') || '').indexOf(keyword) !== -1;
+
+      $card.toggleClass('d-none', !matchesKeyword);
+
+      if (matchesKeyword) {
+        visibleCount++;
+      }
+    });
+
+    $('#topicSearchNoResults').toggleClass('d-none', visibleCount > 0);
+  }
+
+  $('#topicSearchInput').on('input', updateTopicSearch);
+  updateTopicSearch();
 
   var materialLinkIndex = 1;
   var selectedMaterialFiles = [];
