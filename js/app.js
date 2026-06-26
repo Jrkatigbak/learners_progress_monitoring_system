@@ -70,4 +70,288 @@ $(function () {
 
   $('#class_id').on('change', filterGradeLearners);
   filterGradeLearners();
+
+  function updateClassLearnerPicker() {
+    var keyword = ($('#classLearnerSearch').val() || '').toLowerCase().trim();
+    var status = ($('#classLearnerStatusFilter').val() || '').toLowerCase();
+    var visibleCount = 0;
+    var selectedCount = 0;
+
+    $('.class-learner-picker-card').each(function () {
+      var $card = $(this);
+      var matchesKeyword = keyword === '' || ($card.attr('data-search') || '').indexOf(keyword) !== -1;
+      var matchesStatus = status === '' || ($card.attr('data-status') || '') === status;
+      var isVisible = matchesKeyword && matchesStatus;
+
+      $card.toggleClass('d-none', !isVisible);
+
+      if (isVisible) {
+        visibleCount++;
+      }
+
+      if ($card.find('input[type="checkbox"]').prop('checked')) {
+        selectedCount++;
+      }
+    });
+
+    $('#classLearnerNoResults').toggleClass('d-none', visibleCount > 0);
+    $('#classLearnerSelectedCount').text(selectedCount + ' selected');
+  }
+
+  $('#classLearnerSearch, #classLearnerStatusFilter').on('input change', updateClassLearnerPicker);
+  $(document).on('change', '.class-learner-picker-card input[type="checkbox"]', updateClassLearnerPicker);
+  updateClassLearnerPicker();
+
+  var materialLinkIndex = 1;
+  var selectedMaterialFiles = [];
+
+  function formatMaterialFileSize(bytes) {
+    var value = Number(bytes) || 0;
+    var units = ['B', 'KB', 'MB', 'GB'];
+    var unitIndex = 0;
+
+    while (value >= 1024 && unitIndex < units.length - 1) {
+      value /= 1024;
+      unitIndex++;
+    }
+
+    return (unitIndex === 0 ? value : value.toFixed(1)) + ' ' + units[unitIndex];
+  }
+
+  function materialFileKey(file) {
+    return [file.name, file.size, file.lastModified].join('|');
+  }
+
+  function syncMaterialFileInput() {
+    var input = document.getElementById('material_files');
+
+    if (!input || !window.DataTransfer) {
+      return;
+    }
+
+    // The browser replaces file inputs on every browse action, so keep our combined list in sync.
+    var dataTransfer = new DataTransfer();
+    selectedMaterialFiles.forEach(function (file) {
+      dataTransfer.items.add(file);
+    });
+    input.files = dataTransfer.files;
+  }
+
+  function mergeMaterialFiles(files) {
+    var existingKeys = selectedMaterialFiles.map(materialFileKey);
+
+    Array.prototype.forEach.call(files || [], function (file) {
+      if (existingKeys.indexOf(materialFileKey(file)) === -1) {
+        selectedMaterialFiles.push(file);
+        existingKeys.push(materialFileKey(file));
+      }
+    });
+
+    syncMaterialFileInput();
+    renderMaterialFiles();
+  }
+
+  function renderMaterialFiles() {
+    var fileList = selectedMaterialFiles;
+    var $panel = $('#materialFilePanel');
+    var $list = $('#materialFileList');
+
+    $('#materialFileCount').text(fileList.length + (fileList.length === 1 ? ' file selected' : ' files selected'));
+    $panel.toggleClass('d-none', fileList.length === 0);
+    $list.empty();
+
+    fileList.forEach(function (file) {
+      var extension = (file.name.split('.').pop() || '').toLowerCase();
+      var iconClass = extension === 'pdf' ? 'fa-regular fa-file-pdf' : 'fa-regular fa-file-lines';
+      var $row = $('<div class="material-file-row"></div>');
+
+      // Show the exact selected file name and size before the form is submitted.
+      $('<span class="material-file-icon"></span>')
+        .toggleClass('is-pdf', extension === 'pdf')
+        .append($('<i></i>').addClass(iconClass))
+        .appendTo($row);
+      $('<span class="material-file-name"></span>').text(file.name).appendTo($row);
+      $('<span class="material-file-size"></span>').text(formatMaterialFileSize(file.size)).appendTo($row);
+      $list.append($row);
+    });
+  }
+
+  function setMaterialFiles(files) {
+    mergeMaterialFiles(files);
+  }
+
+  function ensureMaterialLinkRemoveState() {
+    var $rows = $('.material-link-row');
+    $rows.find('.material-link-remove').prop('disabled', $rows.length === 1);
+  }
+
+  function addMaterialLinkRow() {
+    var fieldId = 'material_url_' + materialLinkIndex++;
+    var $row = $('<div class="material-link-row"></div>');
+
+    $('<input type="url" class="form-control" name="material_urls[]" placeholder="https://youtube.com/... or https://drive.google.com/...">')
+      .attr('id', fieldId)
+      .appendTo($row);
+    $('<button type="button" class="btn btn-outline-secondary material-link-remove" aria-label="Remove link"><i class="fa-solid fa-xmark"></i></button>')
+      .appendTo($row);
+    $('#materialLinkList').append($row);
+    ensureMaterialLinkRemoveState();
+    $('#' + fieldId).trigger('focus');
+  }
+
+  $('#materialDropZone').on('keydown', function (event) {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      $('#material_files').trigger('click');
+    }
+  });
+
+  $('#materialDropZone').on('dragenter dragover', function (event) {
+    event.preventDefault();
+    event.stopPropagation();
+    $(this).addClass('is-dragover');
+  });
+
+  $('#materialDropZone').on('dragleave dragend drop', function (event) {
+    event.preventDefault();
+    event.stopPropagation();
+    $(this).removeClass('is-dragover');
+  });
+
+  $('#materialDropZone').on('drop', function (event) {
+    var droppedFiles = event.originalEvent.dataTransfer ? event.originalEvent.dataTransfer.files : null;
+    setMaterialFiles(droppedFiles);
+  });
+
+  $('#material_files').on('change', function () {
+    mergeMaterialFiles(this.files);
+  });
+
+  $('#addMaterialLink').on('click', addMaterialLinkRow);
+
+  $(document).on('click', '.material-link-remove', function () {
+    if ($('.material-link-row').length > 1) {
+      $(this).closest('.material-link-row').remove();
+      ensureMaterialLinkRemoveState();
+    }
+  });
+
+  ensureMaterialLinkRemoveState();
+
+  $(document).on('click', '.edit-material-button', function () {
+    var $button = $(this);
+    var externalUrl = $button.attr('data-external-url') || '';
+    var $externalUrlInput = $('#edit_material_external_url');
+
+    // Populate the edit modal from the clicked material card without reloading the page.
+    $('#edit_material_id').val($button.attr('data-material-id') || '');
+    $('#edit_material_title').val($button.attr('data-title') || '');
+    $('#edit_material_description').val($button.attr('data-description') || '');
+    $('#edit_material_folder_id').val($button.attr('data-topic-id') || '0');
+    $externalUrlInput
+      .val(externalUrl)
+      .prop('disabled', externalUrl === '')
+      .attr('placeholder', externalUrl === '' ? 'Uploaded files keep their saved file' : 'https://');
+  });
+
+  $(document).on('click', '.edit-topic-button', function () {
+    var $button = $(this);
+
+    // Keep topic renaming in a small modal so the topic card remains clickable for filtering.
+    $('#edit_topic_id').val($button.attr('data-topic-id') || '');
+    $('#edit_topic_name').val($button.attr('data-name') || '');
+    $('#edit_topic_description').val($button.attr('data-description') || '');
+    $('#edit_topic_return_tool').val($button.attr('data-return-tool') || 'materials');
+  });
+
+  $(document).on('click', '.edit-quiz-button', function () {
+    var $button = $(this);
+
+    // Edit quiz settings without touching saved questions or learner attempts.
+    $('#edit_quiz_id').val($button.attr('data-quiz-id') || '');
+    $('#edit_quiz_title').val($button.attr('data-title') || '');
+    $('#edit_quiz_description').val($button.attr('data-description') || '');
+    $('#edit_quiz_topic_id').val($button.attr('data-topic-id') || '0');
+    $('#edit_timer_minutes').val($button.attr('data-timer-minutes') || '10');
+    $('#edit_quiz_status').val($button.attr('data-status') || 'Active');
+
+    try {
+      window.renderEditQuizQuestions(JSON.parse($button.attr('data-questions') || '[]'));
+    } catch (error) {
+      window.renderEditQuizQuestions([]);
+    }
+  });
+
+  $(document).on('click', '.add-topic-button', function () {
+    // Return to the module where the user opened Add Topic.
+    $('#topic_return_tool').val($(this).attr('data-return-tool') || 'materials');
+  });
+
+  $(document).on('dragstart', '.material-draggable-card', function (event) {
+    var materialId = $(this).attr('data-material-id') || '';
+
+    // Store only the material id; the server validates class and topic ownership before moving it.
+    event.originalEvent.dataTransfer.effectAllowed = 'move';
+    event.originalEvent.dataTransfer.setData('text/plain', materialId);
+    $(this).addClass('is-dragging');
+  });
+
+  $(document).on('dragend', '.material-draggable-card', function () {
+    $('.material-draggable-card').removeClass('is-dragging');
+    $('.material-topic-dropzone').removeClass('is-dragover');
+  });
+
+  $(document).on('dragover', '.material-topic-dropzone', function (event) {
+    event.preventDefault();
+    event.originalEvent.dataTransfer.dropEffect = 'move';
+    $(this).addClass('is-dragover');
+  });
+
+  $(document).on('dragleave', '.material-topic-dropzone', function () {
+    $(this).removeClass('is-dragover');
+  });
+
+  $(document).on('drop', '.material-topic-dropzone', function (event) {
+    event.preventDefault();
+
+    var $topicCard = $(this);
+    var materialId = event.originalEvent.dataTransfer.getData('text/plain') || '';
+    var topicId = $topicCard.attr('data-topic-id') || '';
+    var classId = $('input[name="class_id"]').first().val() || new URLSearchParams(window.location.search).get('class_id') || '';
+
+    if (materialId === '' || topicId === '' || classId === '') {
+      return;
+    }
+
+    $topicCard.addClass('is-saving');
+
+    $.ajax({
+      method: 'POST',
+      url: 'class_workspace.php',
+      dataType: 'json',
+      headers: {
+        'X-Requested-With': 'XMLHttpRequest'
+      },
+      data: {
+        action: 'move_material_topic',
+        class_id: classId,
+        tool: 'materials',
+        material_id: materialId,
+        folder_id: topicId
+      }
+    }).done(function () {
+      window.location.reload();
+    }).fail(function (xhr) {
+      var message = xhr.responseJSON && xhr.responseJSON.message ? xhr.responseJSON.message : 'Material could not be moved.';
+
+      if (window.Swal) {
+        Swal.fire('Move failed', message, 'error');
+      } else {
+        window.alert(message);
+      }
+    }).always(function () {
+      $topicCard.removeClass('is-saving is-dragover');
+      $('.material-draggable-card').removeClass('is-dragging');
+    });
+  });
 });

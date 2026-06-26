@@ -111,6 +111,7 @@ CREATE TABLE IF NOT EXISTS course_enrollments (
 CREATE TABLE IF NOT EXISTS class_tasks (
   id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   class_id INT UNSIGNED NOT NULL,
+  folder_id INT UNSIGNED NULL,
   teacher_id INT UNSIGNED NULL,
   task_title VARCHAR(160) NOT NULL,
   description TEXT NULL,
@@ -119,6 +120,7 @@ CREATE TABLE IF NOT EXISTS class_tasks (
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   INDEX idx_class_tasks_class_id (class_id),
+  INDEX idx_class_tasks_folder_id (folder_id),
   INDEX idx_class_tasks_teacher_id (teacher_id),
   CONSTRAINT fk_class_tasks_class
     FOREIGN KEY (class_id) REFERENCES classes(id)
@@ -171,6 +173,7 @@ CREATE TABLE IF NOT EXISTS learner_grades (
 CREATE TABLE IF NOT EXISTS class_learning_materials (
   id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   class_id INT UNSIGNED NOT NULL,
+  folder_id INT UNSIGNED NULL,
   title VARCHAR(180) NOT NULL,
   description TEXT NULL,
   material_type VARCHAR(40) NOT NULL DEFAULT 'file',
@@ -182,6 +185,7 @@ CREATE TABLE IF NOT EXISTS class_learning_materials (
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   INDEX idx_materials_class_id (class_id),
+  INDEX idx_materials_folder_id (folder_id),
   INDEX idx_materials_type (material_type),
   CONSTRAINT fk_materials_class
     FOREIGN KEY (class_id) REFERENCES classes(id)
@@ -191,10 +195,30 @@ CREATE TABLE IF NOT EXISTS class_learning_materials (
     ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Groups class learning materials, quizzes, and assignments into topics.
+CREATE TABLE IF NOT EXISTS class_material_folders (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  class_id INT UNSIGNED NOT NULL,
+  name VARCHAR(140) NOT NULL,
+  description VARCHAR(255) NULL,
+  created_by_user_id INT UNSIGNED NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX idx_material_folders_class_id (class_id),
+  INDEX idx_material_folders_name (name),
+  CONSTRAINT fk_material_folders_class
+    FOREIGN KEY (class_id) REFERENCES classes(id)
+    ON DELETE CASCADE,
+  CONSTRAINT fk_material_folders_created_by
+    FOREIGN KEY (created_by_user_id) REFERENCES users(id)
+    ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- Stores timed multiple-choice quizzes for each class.
 CREATE TABLE IF NOT EXISTS class_quizzes (
   id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   class_id INT UNSIGNED NOT NULL,
+  folder_id INT UNSIGNED NULL,
   title VARCHAR(180) NOT NULL,
   description TEXT NULL,
   timer_minutes INT UNSIGNED NOT NULL DEFAULT 10,
@@ -203,6 +227,7 @@ CREATE TABLE IF NOT EXISTS class_quizzes (
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   INDEX idx_quizzes_class_id (class_id),
+  INDEX idx_quizzes_folder_id (folder_id),
   INDEX idx_quizzes_status (status),
   CONSTRAINT fk_quizzes_class
     FOREIGN KEY (class_id) REFERENCES classes(id)
@@ -282,6 +307,7 @@ CREATE TABLE IF NOT EXISTS quiz_attempt_answers (
 CREATE TABLE IF NOT EXISTS class_assignments (
   id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   class_id INT UNSIGNED NOT NULL,
+  folder_id INT UNSIGNED NULL,
   title VARCHAR(180) NOT NULL,
   instructions TEXT NULL,
   due_date DATE NULL,
@@ -292,6 +318,7 @@ CREATE TABLE IF NOT EXISTS class_assignments (
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   INDEX idx_assignments_class_id (class_id),
+  INDEX idx_assignments_folder_id (folder_id),
   INDEX idx_assignments_status (status),
   CONSTRAINT fk_assignments_class
     FOREIGN KEY (class_id) REFERENCES classes(id)

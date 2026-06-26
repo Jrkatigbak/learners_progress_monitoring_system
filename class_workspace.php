@@ -89,12 +89,108 @@ function classCourseId(PDO $pdo, array $class): int
     return (int) $lookupStatement->fetchColumn();
 }
 
+function classTopicExists(PDO $pdo, int $classId, int $topicId): bool
+{
+    if ($topicId <= 0) {
+        return true;
+    }
+
+    // Topics are scoped to a class, so forms cannot attach records to another class topic.
+    $topicStatement = $pdo->prepare('SELECT id FROM class_material_folders WHERE id = :id AND class_id = :class_id LIMIT 1');
+    $topicStatement->execute([
+        'id' => $topicId,
+        'class_id' => $classId,
+    ]);
+
+    return (bool) $topicStatement->fetch();
+}
+
+function prepareQuizQuestions(array $questions, array &$errors): array
+{
+    $preparedQuestions = [];
+
+    foreach ($questions as $question) {
+        $questionText = trim((string) ($question['text'] ?? ''));
+        $choices = [
+            trim((string) ($question['choices'][0] ?? '')),
+            trim((string) ($question['choices'][1] ?? '')),
+            trim((string) ($question['choices'][2] ?? '')),
+            trim((string) ($question['choices'][3] ?? '')),
+        ];
+        $correctIndex = (int) ($question['correct'] ?? -1);
+
+        if ($questionText === '' && implode('', $choices) === '') {
+            continue;
+        }
+
+        if ($questionText === '' || in_array('', $choices, true) || $correctIndex < 0 || $correctIndex > 3) {
+            $errors[] = 'Complete every quiz question, four choices, and the correct answer.';
+            break;
+        }
+
+        $preparedQuestions[] = [
+            'text' => $questionText,
+            'choices' => $choices,
+            'correct' => $correctIndex,
+        ];
+    }
+
+    if (!$preparedQuestions && !$errors) {
+        $errors[] = 'Add at least one quiz question.';
+    }
+
+    return $preparedQuestions;
+}
+
+function replaceQuizQuestions(PDO $pdo, int $quizId, array $preparedQuestions): void
+{
+    // Replacing the answer key requires fresh question and choice ids for reliable scoring.
+    $choiceDelete = $pdo->prepare(
+        'DELETE quiz_choices
+         FROM quiz_choices
+         INNER JOIN quiz_questions ON quiz_questions.id = quiz_choices.question_id
+         WHERE quiz_questions.quiz_id = :quiz_id'
+    );
+    $choiceDelete->execute(['quiz_id' => $quizId]);
+
+    $questionDelete = $pdo->prepare('DELETE FROM quiz_questions WHERE quiz_id = :quiz_id');
+    $questionDelete->execute(['quiz_id' => $quizId]);
+
+    $questionStatement = $pdo->prepare(
+        'INSERT INTO quiz_questions (quiz_id, question_text, position)
+         VALUES (:quiz_id, :question_text, :position)'
+    );
+    $choiceStatement = $pdo->prepare(
+        'INSERT INTO quiz_choices (question_id, choice_text, is_correct, position)
+         VALUES (:question_id, :choice_text, :is_correct, :position)'
+    );
+
+    foreach ($preparedQuestions as $questionIndex => $question) {
+        $questionStatement->execute([
+            'quiz_id' => $quizId,
+            'question_text' => $question['text'],
+            'position' => $questionIndex + 1,
+        ]);
+        $questionId = (int) $pdo->lastInsertId();
+
+        foreach ($question['choices'] as $choiceIndex => $choiceText) {
+            $choiceStatement->execute([
+                'question_id' => $questionId,
+                'choice_text' => $choiceText,
+                'is_correct' => $choiceIndex === (int) $question['correct'] ? 1 : 0,
+                'position' => $choiceIndex + 1,
+            ]);
+        }
+    }
+}
+
 $classId = (int) ($_GET['class_id'] ?? $_POST['class_id'] ?? 0);
 $tool = $_GET['tool'] ?? $_POST['tool'] ?? 'dashboard';
 $allowedTools = ['dashboard', 'learners', 'materials', 'quizzes', 'assignments', 'tasks', 'grades'];
 $tool = in_array($tool, $allowedTools, true) ? $tool : 'dashboard';
 $errors = [];
 $success = $_GET['success'] ?? '';
+$selectedTopicId = (int) ($_GET['topic_id'] ?? $_POST['topic_id'] ?? 0);
 $isAdmin = $auth->isAdmin();
 $isTeacher = $auth->isTeacher();
 $teacherProfile = null;
@@ -162,79 +258,442 @@ $courseId = classCourseId($pdo, $class);
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
 
+    if ($action === 'add_class_learners') {
+        $selectedLearnerIds = array_map('intval', $_POST['learner_ids'] ?? []);
+        $selectedLearnerIds = array_values(array_unique(array_filter($selectedLearnerIds)));
+
+        if (!$isAdmin) {
+            $errors[] = 'Only administrators can add learners to a class.';
+        }
+
+        if (!$selectedLearnerIds) {
+            $errors[] = 'Select at least one learner.';
+        }
+
+        if (!$errors) {
+            // Add learners through the class-backed course enrollment and ignore already-linked learners.
+            $eligibleStatement = $pdo->prepare(
+                'SELECT learners.id
+                 FROM learners
+                 LEFT JOIN course_enrollments
+                    ON course_enrollments.learner_id = learners.id
+                   AND course_enrollments.course_id = :course_id
+                 WHERE learners.id = :learner_id
+                   AND (learners.class_id IS NULL OR learners.class_id <> :class_id)
+                   AND course_enrollments.id IS NULL
+                 LIMIT 1'
+            );
+            $enrollStatement = $pdo->prepare(
+                'INSERT INTO course_enrollments (learner_id, course_id, enrollment_status)
+                 VALUES (:learner_id, :course_id, "Enrolled")'
+            );
+            $addedCount = 0;
+
+            foreach ($selectedLearnerIds as $learnerId) {
+                $eligibleStatement->execute([
+                    'learner_id' => $learnerId,
+                    'class_id' => $classId,
+                    'course_id' => $courseId,
+                ]);
+
+                if (!$eligibleStatement->fetch()) {
+                    continue;
+                }
+
+                $enrollStatement->execute([
+                    'learner_id' => $learnerId,
+                    'course_id' => $courseId,
+                ]);
+                $addedCount++;
+            }
+
+            header('Location: class_workspace.php?class_id=' . $classId . '&tool=learners&success=learners_added&added=' . $addedCount);
+            exit;
+        }
+
+        $tool = 'learners';
+    }
+
     if ($action === 'save_material') {
         $title = trim($_POST['material_title'] ?? '');
         $description = trim($_POST['material_description'] ?? '');
-        $materialUrl = trim($_POST['material_url'] ?? '');
-        $filePath = null;
-        $originalFilename = null;
-        $mimeType = null;
-        $materialType = 'file';
+        $folderId = (int) ($_POST['material_folder_id'] ?? 0);
+        $postedMaterialUrls = $_POST['material_urls'] ?? [];
+        $postedMaterialUrls = is_array($postedMaterialUrls) ? $postedMaterialUrls : [$postedMaterialUrls];
+        $materialUrls = array_values(array_filter(array_map('trim', $postedMaterialUrls), static fn ($url): bool => $url !== ''));
+        $uploadedMaterials = [];
+        $maxMaterialFileSize = 200 * 1024 * 1024 * 1024;
 
         if ($title === '') {
             $errors[] = 'Material title is required.';
         }
 
-        $hasUpload = isset($_FILES['material_file']) && $_FILES['material_file']['error'] !== UPLOAD_ERR_NO_FILE;
-        if ($materialUrl === '' && !$hasUpload) {
-            $errors[] = 'Upload a file or paste a learning material link.';
+        if (!classTopicExists($pdo, $classId, $folderId)) {
+            $errors[] = 'Select a valid topic.';
         }
 
-        if ($materialUrl !== '' && !filter_var($materialUrl, FILTER_VALIDATE_URL)) {
-            $errors[] = 'Enter a valid YouTube or website link.';
+        $fileErrors = $_FILES['material_files']['error'] ?? [];
+        $fileErrors = is_array($fileErrors) ? $fileErrors : [$fileErrors];
+        $hasUpload = array_filter($fileErrors, static fn ($error): bool => (int) $error !== UPLOAD_ERR_NO_FILE) !== [];
+        $hasLink = count($materialUrls) > 0;
+
+        if (!$hasLink && !$hasUpload) {
+            $errors[] = 'Upload at least one file or paste a learning material link.';
+        }
+
+        // Validate every submitted external material link because the UI can add multiple link rows.
+        foreach ($materialUrls as $materialUrl) {
+            if (!filter_var($materialUrl, FILTER_VALIDATE_URL)) {
+                $errors[] = 'Enter valid YouTube or website links.';
+                break;
+            }
         }
 
         if ($hasUpload && !$errors) {
-            if ($_FILES['material_file']['error'] !== UPLOAD_ERR_OK) {
-                $errors[] = 'Learning material file could not be uploaded.';
-            } elseif (!is_writable($materialUploadDirectory)) {
+            if (!is_writable($materialUploadDirectory)) {
                 $errors[] = 'Learning material upload folder is not writable.';
             } else {
-                $originalFilename = basename((string) $_FILES['material_file']['name']);
-                $extension = strtolower(pathinfo($originalFilename, PATHINFO_EXTENSION));
                 $blockedExtensions = ['php', 'phtml', 'phar', 'cgi', 'pl', 'sh'];
+                $fileNames = $_FILES['material_files']['name'] ?? [];
+                $fileTmpNames = $_FILES['material_files']['tmp_name'] ?? [];
+                $fileSizes = $_FILES['material_files']['size'] ?? [];
+                $fileNames = is_array($fileNames) ? $fileNames : [$fileNames];
+                $fileTmpNames = is_array($fileTmpNames) ? $fileTmpNames : [$fileTmpNames];
+                $fileSizes = is_array($fileSizes) ? $fileSizes : [$fileSizes];
 
-                if (in_array($extension, $blockedExtensions, true)) {
-                    $errors[] = 'This file type is not allowed for learning materials.';
-                } else {
-                    $mimeType = mime_content_type($_FILES['material_file']['tmp_name']) ?: 'application/octet-stream';
+                foreach ($fileErrors as $fileIndex => $fileError) {
+                    if ((int) $fileError === UPLOAD_ERR_NO_FILE) {
+                        continue;
+                    }
+
+                    if ((int) $fileError !== UPLOAD_ERR_OK) {
+                        $errors[] = 'One learning material file could not be uploaded.';
+                        break;
+                    }
+
+                    $originalFilename = basename((string) ($fileNames[$fileIndex] ?? 'material'));
+                    $extension = strtolower(pathinfo($originalFilename, PATHINFO_EXTENSION));
+                    $fileSize = (int) ($fileSizes[$fileIndex] ?? 0);
+
+                    if (in_array($extension, $blockedExtensions, true)) {
+                        $errors[] = 'This file type is not allowed for learning materials.';
+                        break;
+                    }
+
+                    if ($fileSize > $maxMaterialFileSize) {
+                        $errors[] = 'Each learning material file must be 200GB or smaller.';
+                        break;
+                    }
+
+                    $tmpName = (string) ($fileTmpNames[$fileIndex] ?? '');
+                    $mimeType = $tmpName !== '' ? (mime_content_type($tmpName) ?: 'application/octet-stream') : 'application/octet-stream';
                     $materialType = materialTypeFromFile($mimeType, $extension);
                     $safeExtension = $extension !== '' ? $extension : 'bin';
                     $filename = 'material-' . date('YmdHis') . '-' . bin2hex(random_bytes(4)) . '.' . $safeExtension;
                     $targetPath = $materialUploadDirectory . '/' . $filename;
 
-                    if (move_uploaded_file($_FILES['material_file']['tmp_name'], $targetPath)) {
-                        $filePath = $materialUploadPathPrefix . $filename;
+                    if (move_uploaded_file($tmpName, $targetPath)) {
+                        $uploadedMaterials[] = [
+                            'file_path' => $materialUploadPathPrefix . $filename,
+                            'original_filename' => $originalFilename,
+                            'mime_type' => $mimeType,
+                            'material_type' => $materialType,
+                        ];
                     } else {
                         $errors[] = 'Learning material file could not be saved.';
+                        break;
                     }
                 }
             }
-        } elseif ($materialUrl !== '') {
-            $materialType = preg_match('/(youtube\.com|youtu\.be)/i', $materialUrl) ? 'youtube' : 'link';
         }
 
         if (!$errors) {
-            // Store either the uploaded file reference or the external learning material URL for this class.
+            // Store each uploaded file and each external link as its own class material.
             $materialStatement = $pdo->prepare(
                 'INSERT INTO class_learning_materials
-                    (class_id, title, description, material_type, file_path, original_filename, mime_type, external_url, uploaded_by_user_id)
+                    (class_id, folder_id, title, description, material_type, file_path, original_filename, mime_type, external_url, uploaded_by_user_id)
                  VALUES
-                    (:class_id, :title, :description, :material_type, :file_path, :original_filename, :mime_type, :external_url, :uploaded_by_user_id)'
+                    (:class_id, :folder_id, :title, :description, :material_type, :file_path, :original_filename, :mime_type, :external_url, :uploaded_by_user_id)'
             );
-            $materialStatement->execute([
-                'class_id' => $classId,
-                'title' => $title,
-                'description' => $description !== '' ? $description : null,
-                'material_type' => $materialType,
-                'file_path' => $filePath,
-                'original_filename' => $originalFilename,
-                'mime_type' => $mimeType,
-                'external_url' => $materialUrl !== '' ? $materialUrl : null,
-                'uploaded_by_user_id' => (int) $currentUser['id'],
-            ]);
+            $totalMaterialItems = count($uploadedMaterials) + count($materialUrls);
+            foreach ($uploadedMaterials as $index => $uploadedMaterial) {
+                $materialTitle = $totalMaterialItems === 1
+                    ? $title
+                    : $title . ' - ' . $uploadedMaterial['original_filename'];
+                $materialStatement->execute([
+                    'class_id' => $classId,
+                    'folder_id' => $folderId > 0 ? $folderId : null,
+                    'title' => $materialTitle,
+                    'description' => $description !== '' ? $description : null,
+                    'material_type' => $uploadedMaterial['material_type'],
+                    'file_path' => $uploadedMaterial['file_path'],
+                    'original_filename' => $uploadedMaterial['original_filename'],
+                    'mime_type' => $uploadedMaterial['mime_type'],
+                    'external_url' => null,
+                    'uploaded_by_user_id' => (int) $currentUser['id'],
+                ]);
+            }
+
+            foreach ($materialUrls as $index => $materialUrl) {
+                $materialType = preg_match('/(youtube\.com|youtu\.be)/i', $materialUrl) ? 'youtube' : 'link';
+                $urlHost = parse_url($materialUrl, PHP_URL_HOST);
+                $urlHost = is_string($urlHost) && $urlHost !== '' ? preg_replace('/^www\./i', '', $urlHost) : 'Link ' . ($index + 1);
+                $materialTitle = $totalMaterialItems === 1 ? $title : $title . ' - ' . $urlHost;
+                $materialStatement->execute([
+                    'class_id' => $classId,
+                    'folder_id' => $folderId > 0 ? $folderId : null,
+                    'title' => $materialTitle,
+                    'description' => $description !== '' ? $description : null,
+                    'material_type' => $materialType,
+                    'file_path' => null,
+                    'original_filename' => null,
+                    'mime_type' => null,
+                    'external_url' => $materialUrl,
+                    'uploaded_by_user_id' => (int) $currentUser['id'],
+                ]);
+            }
 
             header('Location: class_workspace.php?class_id=' . $classId . '&tool=materials&success=material_created');
+            exit;
+        }
+
+        $tool = 'materials';
+    }
+
+    if ($action === 'save_material_folder') {
+        $folderName = trim($_POST['folder_name'] ?? '');
+        $folderDescription = trim($_POST['folder_description'] ?? '');
+        $returnTool = $_POST['return_tool'] ?? 'materials';
+        $returnTool = in_array($returnTool, ['materials', 'quizzes', 'assignments', 'tasks'], true) ? $returnTool : 'materials';
+
+        if ($folderName === '') {
+            $errors[] = 'Topic name is required.';
+        }
+
+        if (!$errors) {
+            // Topics are scoped per class so the same topic names can exist in different classes.
+            $folderStatement = $pdo->prepare(
+                'INSERT INTO class_material_folders (class_id, name, description, created_by_user_id)
+                 VALUES (:class_id, :name, :description, :created_by_user_id)'
+            );
+            $folderStatement->execute([
+                'class_id' => $classId,
+                'name' => $folderName,
+                'description' => $folderDescription !== '' ? $folderDescription : null,
+                'created_by_user_id' => (int) $currentUser['id'],
+            ]);
+
+            header('Location: class_workspace.php?class_id=' . $classId . '&tool=' . $returnTool . '&success=topic_created');
+            exit;
+        }
+
+        $tool = $returnTool;
+    }
+
+    if ($action === 'update_material_folder') {
+        $folderId = (int) ($_POST['folder_id'] ?? 0);
+        $folderName = trim($_POST['folder_name'] ?? '');
+        $folderDescription = trim($_POST['folder_description'] ?? '');
+        $returnTool = $_POST['return_tool'] ?? 'materials';
+        $returnTool = in_array($returnTool, ['materials', 'quizzes', 'assignments', 'tasks'], true) ? $returnTool : 'materials';
+
+        if (!classTopicExists($pdo, $classId, $folderId)) {
+            $errors[] = 'Select a valid topic.';
+        }
+
+        if ($folderName === '') {
+            $errors[] = 'Topic name is required.';
+        }
+
+        if (!$errors) {
+            // Rename only topics that belong to the current class workspace.
+            $folderStatement = $pdo->prepare(
+                'UPDATE class_material_folders
+                 SET name = :name, description = :description
+                 WHERE id = :id AND class_id = :class_id'
+            );
+            $folderStatement->execute([
+                'name' => $folderName,
+                'description' => $folderDescription !== '' ? $folderDescription : null,
+                'id' => $folderId,
+                'class_id' => $classId,
+            ]);
+
+            $topicRoute = $returnTool === 'materials' ? '&topic_id=' . $folderId : '';
+            header('Location: class_workspace.php?class_id=' . $classId . '&tool=' . $returnTool . $topicRoute . '&success=topic_updated');
+            exit;
+        }
+
+        $tool = $returnTool;
+    }
+
+    if ($action === 'delete_material_folder') {
+        $folderId = (int) ($_POST['folder_id'] ?? 0);
+        $returnTool = $_POST['return_tool'] ?? 'tasks';
+        $returnTool = in_array($returnTool, ['materials', 'quizzes', 'assignments', 'tasks'], true) ? $returnTool : 'tasks';
+
+        if (!classTopicExists($pdo, $classId, $folderId) || $folderId <= 0) {
+            $errors[] = 'Select a valid topic.';
+        }
+
+        if (!$errors) {
+            // Deleting a topic only unassigns content so materials, quizzes, assignments, and grades stay intact.
+            try {
+                $pdo->beginTransaction();
+                $unassignStatements = [
+                    'UPDATE class_learning_materials SET folder_id = NULL WHERE folder_id = :folder_id AND class_id = :class_id',
+                    'UPDATE class_quizzes SET folder_id = NULL WHERE folder_id = :folder_id AND class_id = :class_id',
+                    'UPDATE class_assignments SET folder_id = NULL WHERE folder_id = :folder_id AND class_id = :class_id',
+                    'UPDATE class_tasks SET folder_id = NULL WHERE folder_id = :folder_id AND class_id = :class_id',
+                ];
+
+                foreach ($unassignStatements as $unassignSql) {
+                    $unassignStatement = $pdo->prepare($unassignSql);
+                    $unassignStatement->execute([
+                        'folder_id' => $folderId,
+                        'class_id' => $classId,
+                    ]);
+                }
+
+                $deleteFolder = $pdo->prepare('DELETE FROM class_material_folders WHERE id = :id AND class_id = :class_id');
+                $deleteFolder->execute([
+                    'id' => $folderId,
+                    'class_id' => $classId,
+                ]);
+                $pdo->commit();
+            } catch (Throwable $exception) {
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
+
+                $errors[] = 'Topic could not be deleted.';
+            }
+
+            if (!$errors) {
+                header('Location: class_workspace.php?class_id=' . $classId . '&tool=' . $returnTool . '&success=topic_deleted');
+                exit;
+            }
+        }
+
+        $tool = $returnTool;
+    }
+
+    if ($action === 'move_material_topic') {
+        $materialId = (int) ($_POST['material_id'] ?? 0);
+        $folderId = (int) ($_POST['folder_id'] ?? 0);
+        $isAjaxRequest = strtolower($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '') === 'xmlhttprequest';
+
+        if ($materialId <= 0) {
+            $errors[] = 'Select a valid learning material.';
+        }
+
+        if (!classTopicExists($pdo, $classId, $folderId)) {
+            $errors[] = 'Select a valid topic.';
+        }
+
+        if (!$errors) {
+            // Drag-and-drop only moves materials inside the currently open class workspace.
+            $moveStatement = $pdo->prepare(
+                'UPDATE class_learning_materials
+                 SET folder_id = :folder_id
+                 WHERE id = :id AND class_id = :class_id'
+            );
+            $moveStatement->execute([
+                'folder_id' => $folderId > 0 ? $folderId : null,
+                'id' => $materialId,
+                'class_id' => $classId,
+            ]);
+
+            if ($isAjaxRequest) {
+                header('Content-Type: application/json');
+                echo json_encode([
+                    'ok' => $moveStatement->rowCount() > 0,
+                    'message' => $moveStatement->rowCount() > 0 ? 'Material moved to topic.' : 'Material was already in that topic.',
+                ]);
+                exit;
+            }
+
+            header('Location: class_workspace.php?class_id=' . $classId . '&tool=materials&success=material_created');
+            exit;
+        }
+
+        if ($isAjaxRequest) {
+            header('Content-Type: application/json', true, 422);
+            echo json_encode(['ok' => false, 'message' => implode(' ', $errors)]);
+            exit;
+        }
+
+        $tool = 'materials';
+    }
+
+    if ($action === 'update_material') {
+        $materialId = (int) ($_POST['material_id'] ?? 0);
+        $title = trim($_POST['material_title'] ?? '');
+        $description = trim($_POST['material_description'] ?? '');
+        $folderId = (int) ($_POST['material_folder_id'] ?? 0);
+        $externalUrl = trim($_POST['material_external_url'] ?? '');
+        $editableMaterial = null;
+
+        if ($materialId <= 0) {
+            $errors[] = 'Select a valid learning material.';
+        } else {
+            $editableMaterialStatement = $pdo->prepare('SELECT * FROM class_learning_materials WHERE id = :id AND class_id = :class_id LIMIT 1');
+            $editableMaterialStatement->execute([
+                'id' => $materialId,
+                'class_id' => $classId,
+            ]);
+            $editableMaterial = $editableMaterialStatement->fetch() ?: null;
+
+            if (!$editableMaterial) {
+                $errors[] = 'Select a valid learning material.';
+            }
+        }
+
+        if ($title === '') {
+            $errors[] = 'Material title is required.';
+        }
+
+        if (!classTopicExists($pdo, $classId, $folderId)) {
+            $errors[] = 'Select a valid topic.';
+        }
+
+        if ($editableMaterial && !empty($editableMaterial['external_url']) && $externalUrl === '') {
+            $errors[] = 'Material link is required for link resources.';
+        }
+
+        if ($externalUrl !== '' && !filter_var($externalUrl, FILTER_VALIDATE_URL)) {
+            $errors[] = 'Enter a valid material link.';
+        }
+
+        if (!$errors) {
+            // Keep edits scoped to the open class; file uploads keep their existing stored file path.
+            $updateStatement = $pdo->prepare(
+                'UPDATE class_learning_materials
+                 SET folder_id = :folder_id,
+                     title = :title,
+                     description = :description,
+                     external_url = CASE
+                        WHEN external_url IS NULL THEN external_url
+                        ELSE :external_url
+                     END,
+                     material_type = CASE
+                        WHEN external_url IS NULL THEN material_type
+                        WHEN :external_url_for_type REGEXP "(youtube\\.com|youtu\\.be)" THEN "youtube"
+                        ELSE "link"
+                     END
+                 WHERE id = :id AND class_id = :class_id'
+            );
+            $updateStatement->execute([
+                'folder_id' => $folderId > 0 ? $folderId : null,
+                'title' => $title,
+                'description' => $description !== '' ? $description : null,
+                'external_url' => $externalUrl !== '' ? $externalUrl : null,
+                'external_url_for_type' => $externalUrl,
+                'id' => $materialId,
+                'class_id' => $classId,
+            ]);
+
+            header('Location: class_workspace.php?class_id=' . $classId . '&tool=materials' . ($folderId > 0 ? '&topic_id=' . $folderId : '') . '&success=material_updated');
             exit;
         }
 
@@ -267,6 +726,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($action === 'save_quiz') {
         $quizTitle = trim($_POST['quiz_title'] ?? '');
         $quizDescription = trim($_POST['quiz_description'] ?? '');
+        $quizTopicId = (int) ($_POST['quiz_topic_id'] ?? 0);
         $timerMinutes = (int) ($_POST['timer_minutes'] ?? 10);
         $questions = $_POST['questions'] ?? [];
 
@@ -278,47 +738,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $errors[] = 'Quiz timer must be from 1 to 240 minutes.';
         }
 
-        $preparedQuestions = [];
-        foreach ($questions as $question) {
-            $questionText = trim((string) ($question['text'] ?? ''));
-            $choices = [
-                trim((string) ($question['choices'][0] ?? '')),
-                trim((string) ($question['choices'][1] ?? '')),
-                trim((string) ($question['choices'][2] ?? '')),
-                trim((string) ($question['choices'][3] ?? '')),
-            ];
-            $correctIndex = (int) ($question['correct'] ?? -1);
-
-            if ($questionText === '' && implode('', $choices) === '') {
-                continue;
-            }
-
-            if ($questionText === '' || in_array('', $choices, true) || $correctIndex < 0 || $correctIndex > 3) {
-                $errors[] = 'Complete every quiz question, four choices, and the correct answer.';
-                break;
-            }
-
-            $preparedQuestions[] = [
-                'text' => $questionText,
-                'choices' => $choices,
-                'correct' => $correctIndex,
-            ];
+        if (!classTopicExists($pdo, $classId, $quizTopicId)) {
+            $errors[] = 'Select a valid topic.';
         }
 
-        if (!$preparedQuestions) {
-            $errors[] = 'Add at least one quiz question.';
-        }
+        $preparedQuestions = prepareQuizQuestions(is_array($questions) ? $questions : [], $errors);
 
         if (!$errors) {
             $pdo->beginTransaction();
 
             // A quiz owns its questions and choices so scoring can be computed later from the saved answer key.
             $quizStatement = $pdo->prepare(
-                'INSERT INTO class_quizzes (class_id, title, description, timer_minutes, status, created_by_user_id)
-                 VALUES (:class_id, :title, :description, :timer_minutes, :status, :created_by_user_id)'
+                'INSERT INTO class_quizzes (class_id, folder_id, title, description, timer_minutes, status, created_by_user_id)
+                 VALUES (:class_id, :folder_id, :title, :description, :timer_minutes, :status, :created_by_user_id)'
             );
             $quizStatement->execute([
                 'class_id' => $classId,
+                'folder_id' => $quizTopicId > 0 ? $quizTopicId : null,
                 'title' => $quizTitle,
                 'description' => $quizDescription !== '' ? $quizDescription : null,
                 'timer_minutes' => $timerMinutes,
@@ -327,37 +763,101 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             ]);
             $quizId = (int) $pdo->lastInsertId();
 
-            $questionStatement = $pdo->prepare(
-                'INSERT INTO quiz_questions (quiz_id, question_text, position)
-                 VALUES (:quiz_id, :question_text, :position)'
-            );
-            $choiceStatement = $pdo->prepare(
-                'INSERT INTO quiz_choices (question_id, choice_text, is_correct, position)
-                 VALUES (:question_id, :choice_text, :is_correct, :position)'
-            );
-
-            foreach ($preparedQuestions as $questionIndex => $question) {
-                $questionStatement->execute([
-                    'quiz_id' => $quizId,
-                    'question_text' => $question['text'],
-                    'position' => $questionIndex + 1,
-                ]);
-                $questionId = (int) $pdo->lastInsertId();
-
-                foreach ($question['choices'] as $choiceIndex => $choiceText) {
-                    $choiceStatement->execute([
-                        'question_id' => $questionId,
-                        'choice_text' => $choiceText,
-                        'is_correct' => $choiceIndex === (int) $question['correct'] ? 1 : 0,
-                        'position' => $choiceIndex + 1,
-                    ]);
-                }
-            }
+            replaceQuizQuestions($pdo, $quizId, $preparedQuestions);
 
             $pdo->commit();
 
             header('Location: class_workspace.php?class_id=' . $classId . '&tool=quizzes&success=quiz_created');
             exit;
+        }
+
+        $tool = 'quizzes';
+    }
+
+    if ($action === 'update_quiz') {
+        $quizId = (int) ($_POST['quiz_id'] ?? 0);
+        $quizTitle = trim($_POST['quiz_title'] ?? '');
+        $quizDescription = trim($_POST['quiz_description'] ?? '');
+        $quizTopicId = (int) ($_POST['quiz_topic_id'] ?? 0);
+        $timerMinutes = (int) ($_POST['timer_minutes'] ?? 10);
+        $quizStatus = trim($_POST['quiz_status'] ?? 'Active');
+        $allowedQuizStatuses = ['Active', 'Inactive'];
+        $questions = $_POST['questions'] ?? [];
+
+        if ($quizTitle === '') {
+            $errors[] = 'Quiz title is required.';
+        }
+
+        if ($timerMinutes < 1 || $timerMinutes > 240) {
+            $errors[] = 'Quiz timer must be from 1 to 240 minutes.';
+        }
+
+        if (!in_array($quizStatus, $allowedQuizStatuses, true)) {
+            $errors[] = 'Select a valid quiz status.';
+        }
+
+        $quizOwnerStatement = $pdo->prepare('SELECT id FROM class_quizzes WHERE id = :id AND class_id = :class_id LIMIT 1');
+        $quizOwnerStatement->execute([
+            'id' => $quizId,
+            'class_id' => $classId,
+        ]);
+
+        if (!$quizOwnerStatement->fetch()) {
+            $errors[] = 'Select a valid quiz.';
+        }
+
+        if (!classTopicExists($pdo, $classId, $quizTopicId)) {
+            $errors[] = 'Select a valid topic.';
+        }
+
+        $preparedQuestions = prepareQuizQuestions(is_array($questions) ? $questions : [], $errors);
+
+        if (!$errors) {
+            try {
+                $pdo->beginTransaction();
+
+                // Replacing questions clears old attempts because saved answers point to old choice ids.
+                $answerDelete = $pdo->prepare(
+                    'DELETE quiz_attempt_answers
+                     FROM quiz_attempt_answers
+                     INNER JOIN quiz_attempts ON quiz_attempts.id = quiz_attempt_answers.attempt_id
+                     WHERE quiz_attempts.quiz_id = :quiz_id'
+                );
+                $answerDelete->execute(['quiz_id' => $quizId]);
+
+                $attemptDelete = $pdo->prepare('DELETE FROM quiz_attempts WHERE quiz_id = :quiz_id');
+                $attemptDelete->execute(['quiz_id' => $quizId]);
+
+                $quizUpdate = $pdo->prepare(
+                    'UPDATE class_quizzes
+                     SET folder_id = :folder_id,
+                         title = :title,
+                         description = :description,
+                         timer_minutes = :timer_minutes,
+                         status = :status
+                     WHERE id = :id AND class_id = :class_id'
+                );
+                $quizUpdate->execute([
+                    'folder_id' => $quizTopicId > 0 ? $quizTopicId : null,
+                    'title' => $quizTitle,
+                    'description' => $quizDescription !== '' ? $quizDescription : null,
+                    'timer_minutes' => $timerMinutes,
+                    'status' => $quizStatus,
+                    'id' => $quizId,
+                    'class_id' => $classId,
+                ]);
+                replaceQuizQuestions($pdo, $quizId, $preparedQuestions);
+                $pdo->commit();
+
+                header('Location: class_workspace.php?class_id=' . $classId . '&tool=quizzes&success=quiz_updated');
+                exit;
+            } catch (Throwable $exception) {
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
+
+                $errors[] = 'Quiz could not be updated.';
+            }
         }
 
         $tool = 'quizzes';
@@ -410,6 +910,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $assignmentTitle = trim($_POST['assignment_title'] ?? '');
         $instructions = trim($_POST['assignment_instructions'] ?? '');
         $dueDate = trim($_POST['due_date'] ?? '');
+        $assignmentTopicId = (int) ($_POST['assignment_topic_id'] ?? 0);
         $attachmentPath = null;
         $originalFilename = null;
 
@@ -419,6 +920,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         if ($dueDate !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $dueDate)) {
             $errors[] = 'Choose a valid due date.';
+        }
+
+        if (!classTopicExists($pdo, $classId, $assignmentTopicId)) {
+            $errors[] = 'Select a valid topic.';
         }
 
         $hasAssignmentUpload = isset($_FILES['assignment_file']) && $_FILES['assignment_file']['error'] !== UPLOAD_ERR_NO_FILE;
@@ -452,12 +957,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // Assignments are class-scoped requirements that learners can submit from their portal.
             $assignmentStatement = $pdo->prepare(
                 'INSERT INTO class_assignments
-                    (class_id, title, instructions, due_date, attachment_path, original_filename, status, created_by_user_id)
+                    (class_id, folder_id, title, instructions, due_date, attachment_path, original_filename, status, created_by_user_id)
                  VALUES
-                    (:class_id, :title, :instructions, :due_date, :attachment_path, :original_filename, :status, :created_by_user_id)'
+                    (:class_id, :folder_id, :title, :instructions, :due_date, :attachment_path, :original_filename, :status, :created_by_user_id)'
             );
             $assignmentStatement->execute([
                 'class_id' => $classId,
+                'folder_id' => $assignmentTopicId > 0 ? $assignmentTopicId : null,
                 'title' => $assignmentTitle,
                 'instructions' => $instructions !== '' ? $instructions : null,
                 'due_date' => $dueDate !== '' ? $dueDate : null,
@@ -504,23 +1010,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $title = trim($_POST['task_title'] ?? '');
         $description = trim($_POST['description'] ?? '');
         $taskDate = trim($_POST['task_date'] ?? date('Y-m-d'));
+        $taskTopicId = (int) ($_POST['task_topic_id'] ?? 0);
 
         if ($title === '') {
-            $errors[] = 'Task title is required.';
+            $errors[] = 'Topic title is required.';
         }
 
         if ($taskDate === '' || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $taskDate)) {
-            $errors[] = 'Choose a valid task date.';
+            $errors[] = 'Choose a valid topic date.';
+        }
+
+        if (!classTopicExists($pdo, $classId, $taskTopicId)) {
+            $errors[] = 'Select a valid class topic.';
         }
 
         if (!$errors) {
-            // Tasks are tied to this class so grade entry can stay class-specific.
+            // Grade items can be grouped under the same reusable class topics as resources.
             $taskStatement = $pdo->prepare(
-                'INSERT INTO class_tasks (class_id, teacher_id, task_title, description, task_date, created_by_user_id)
-                 VALUES (:class_id, :teacher_id, :task_title, :description, :task_date, :created_by_user_id)'
+                'INSERT INTO class_tasks (class_id, folder_id, teacher_id, task_title, description, task_date, created_by_user_id)
+                 VALUES (:class_id, :folder_id, :teacher_id, :task_title, :description, :task_date, :created_by_user_id)'
             );
             $taskStatement->execute([
                 'class_id' => $classId,
+                'folder_id' => $taskTopicId > 0 ? $taskTopicId : null,
                 'teacher_id' => !empty($class['teacher_id']) ? (int) $class['teacher_id'] : null,
                 'task_title' => $title,
                 'description' => $description !== '' ? $description : null,
@@ -536,7 +1048,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if ($action === 'delete_task') {
-        // Delete a class task and its task grades from this workspace only.
+        // Delete a class topic and its grades from this workspace only.
         $taskId = (int) ($_POST['task_id'] ?? 0);
         $deleteGrades = $pdo->prepare('DELETE FROM learner_grades WHERE task_id = :task_id AND class_id = :class_id');
         $deleteGrades->execute([
@@ -564,7 +1076,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $task = $taskStatement->fetch();
 
         if (!$task) {
-            $errors[] = 'Choose a valid task.';
+            $errors[] = 'Choose a valid topic.';
         }
 
         $scores = $_POST['scores'] ?? [];
@@ -686,11 +1198,30 @@ $learnerStatement->execute([
 ]);
 $learners = $learnerStatement->fetchAll();
 
+// Available learners exclude anyone already connected to this class to prevent duplicate class enrollment.
+$availableLearnerStatement = $pdo->prepare(
+    'SELECT learners.*
+     FROM learners
+     LEFT JOIN course_enrollments
+        ON course_enrollments.learner_id = learners.id
+       AND course_enrollments.course_id = :course_id
+     WHERE (learners.class_id IS NULL OR learners.class_id <> :class_id)
+       AND course_enrollments.id IS NULL
+     ORDER BY learners.first_name, learners.last_name'
+);
+$availableLearnerStatement->execute([
+    'class_id' => $classId,
+    'course_id' => $courseId,
+]);
+$availableLearners = $availableLearnerStatement->fetchAll();
+
 $tasksStatement = $pdo->prepare(
     'SELECT class_tasks.*,
+            class_material_folders.name AS topic_name,
             COUNT(learner_grades.id) AS grade_count,
             COALESCE(AVG(learner_grades.score), 0) AS average_score
      FROM class_tasks
+     LEFT JOIN class_material_folders ON class_material_folders.id = class_tasks.folder_id
      LEFT JOIN learner_grades ON learner_grades.task_id = class_tasks.id
      WHERE class_tasks.class_id = :class_id
      GROUP BY class_tasks.id
@@ -699,41 +1230,161 @@ $tasksStatement = $pdo->prepare(
 $tasksStatement->execute(['class_id' => $classId]);
 $tasks = $tasksStatement->fetchAll();
 
-$materialsStatement = $pdo->prepare(
-    'SELECT class_learning_materials.*, users.name AS uploader_name
+$materialFoldersStatement = $pdo->prepare(
+    'SELECT class_material_folders.*,
+            (
+                SELECT COUNT(*)
+                FROM class_learning_materials
+                WHERE class_learning_materials.folder_id = class_material_folders.id
+            ) AS material_count,
+            (
+                SELECT COUNT(*)
+                FROM class_quizzes
+                WHERE class_quizzes.folder_id = class_material_folders.id
+            ) AS quiz_count,
+            (
+                SELECT COUNT(*)
+                FROM class_assignments
+                WHERE class_assignments.folder_id = class_material_folders.id
+            ) AS assignment_count,
+            (
+                SELECT COUNT(*)
+                FROM class_tasks
+                WHERE class_tasks.folder_id = class_material_folders.id
+            ) AS grade_item_count
+     FROM class_material_folders
+     WHERE class_material_folders.class_id = :class_id
+     ORDER BY class_material_folders.created_at DESC, class_material_folders.id DESC'
+);
+$materialFoldersStatement->execute(['class_id' => $classId]);
+$materialFolders = $materialFoldersStatement->fetchAll();
+$selectedTopic = null;
+foreach ($materialFolders as $folder) {
+    if ((int) $folder['id'] === $selectedTopicId) {
+        $selectedTopic = $folder;
+        break;
+    }
+}
+
+if (!$selectedTopic) {
+    $selectedTopicId = 0;
+}
+
+$materialsSql = 'SELECT class_learning_materials.*, users.name AS uploader_name, class_material_folders.name AS folder_name
      FROM class_learning_materials
      LEFT JOIN users ON users.id = class_learning_materials.uploaded_by_user_id
-     WHERE class_learning_materials.class_id = :class_id
-     ORDER BY class_learning_materials.created_at DESC, class_learning_materials.id DESC'
-);
-$materialsStatement->execute(['class_id' => $classId]);
+     LEFT JOIN class_material_folders ON class_material_folders.id = class_learning_materials.folder_id
+     WHERE class_learning_materials.class_id = :class_id';
+$materialsParams = ['class_id' => $classId];
+
+if ($selectedTopicId > 0) {
+    $materialsSql .= ' AND class_learning_materials.folder_id = :topic_id';
+    $materialsParams['topic_id'] = $selectedTopicId;
+} else {
+    // The main resources view only shows materials that are not already organized into a topic.
+    $materialsSql .= ' AND class_learning_materials.folder_id IS NULL';
+}
+
+$materialsSql .= ' ORDER BY class_learning_materials.created_at DESC, class_learning_materials.id DESC';
+$materialsStatement = $pdo->prepare($materialsSql);
+$materialsStatement->execute($materialsParams);
 $materials = $materialsStatement->fetchAll();
 
-$quizzesStatement = $pdo->prepare(
-    'SELECT class_quizzes.*,
+$quizzesSql = 'SELECT class_quizzes.*,
+            class_material_folders.name AS topic_name,
             COUNT(DISTINCT quiz_questions.id) AS question_count,
             COUNT(DISTINCT quiz_attempts.id) AS attempt_count,
             COALESCE(AVG(quiz_attempts.score), 0) AS average_score
      FROM class_quizzes
+     LEFT JOIN class_material_folders ON class_material_folders.id = class_quizzes.folder_id
      LEFT JOIN quiz_questions ON quiz_questions.quiz_id = class_quizzes.id
      LEFT JOIN quiz_attempts ON quiz_attempts.quiz_id = class_quizzes.id
-     WHERE class_quizzes.class_id = :class_id
+     WHERE class_quizzes.class_id = :class_id';
+$quizParameters = ['class_id' => $classId];
+
+if ($tool === 'quizzes' && $selectedTopicId > 0) {
+    // Topic clicks on the quiz page show only quizzes organized inside that topic.
+    $quizzesSql .= ' AND class_quizzes.folder_id = :topic_id';
+    $quizParameters['topic_id'] = $selectedTopicId;
+}
+
+$quizzesSql .= '
      GROUP BY class_quizzes.id
-     ORDER BY class_quizzes.created_at DESC, class_quizzes.id DESC'
-);
-$quizzesStatement->execute(['class_id' => $classId]);
+     ORDER BY class_quizzes.created_at DESC, class_quizzes.id DESC';
+$quizzesStatement = $pdo->prepare($quizzesSql);
+$quizzesStatement->execute($quizParameters);
 $quizzes = $quizzesStatement->fetchAll();
 
-$assignmentsStatement = $pdo->prepare(
-    'SELECT class_assignments.*,
+$quizQuestionMap = [];
+$quizIds = array_map(static fn ($quiz): int => (int) $quiz['id'], $quizzes);
+
+if ($quizIds) {
+    $quizQuestionPlaceholders = implode(',', array_fill(0, count($quizIds), '?'));
+    $quizQuestionStatement = $pdo->prepare(
+        'SELECT quiz_questions.id AS question_id,
+                quiz_questions.quiz_id,
+                quiz_questions.question_text,
+                quiz_questions.position AS question_position,
+                quiz_choices.choice_text,
+                quiz_choices.is_correct,
+                quiz_choices.position AS choice_position
+         FROM quiz_questions
+         LEFT JOIN quiz_choices ON quiz_choices.question_id = quiz_questions.id
+         WHERE quiz_questions.quiz_id IN (' . $quizQuestionPlaceholders . ')
+         ORDER BY quiz_questions.quiz_id, quiz_questions.position, quiz_choices.position'
+    );
+    $quizQuestionStatement->execute($quizIds);
+
+    foreach ($quizQuestionStatement->fetchAll() as $row) {
+        $quizId = (int) $row['quiz_id'];
+        $questionId = (int) $row['question_id'];
+
+        if (!isset($quizQuestionMap[$quizId])) {
+            $quizQuestionMap[$quizId] = [];
+        }
+
+        if (!isset($quizQuestionMap[$quizId][$questionId])) {
+            $quizQuestionMap[$quizId][$questionId] = [
+                'text' => (string) $row['question_text'],
+                'choices' => ['', '', '', ''],
+                'correct' => 0,
+            ];
+        }
+
+        $choiceIndex = max(0, min(3, (int) $row['choice_position'] - 1));
+        $quizQuestionMap[$quizId][$questionId]['choices'][$choiceIndex] = (string) ($row['choice_text'] ?? '');
+
+        if ((int) $row['is_correct'] === 1) {
+            $quizQuestionMap[$quizId][$questionId]['correct'] = $choiceIndex;
+        }
+    }
+
+    foreach ($quizQuestionMap as $quizId => $questionRows) {
+        // Flatten by quiz id so the front-end can loop over a simple JSON array.
+        $quizQuestionMap[$quizId] = array_values($questionRows);
+    }
+}
+
+$assignmentsSql = 'SELECT class_assignments.*,
+            class_material_folders.name AS topic_name,
             COUNT(assignment_submissions.id) AS submission_count
      FROM class_assignments
+     LEFT JOIN class_material_folders ON class_material_folders.id = class_assignments.folder_id
      LEFT JOIN assignment_submissions ON assignment_submissions.assignment_id = class_assignments.id
-     WHERE class_assignments.class_id = :class_id
+     WHERE class_assignments.class_id = :class_id';
+$assignmentParameters = ['class_id' => $classId];
+
+if ($tool === 'assignments' && $selectedTopicId > 0) {
+    // Topic clicks on the assignments page show only assignments organized inside that topic.
+    $assignmentsSql .= ' AND class_assignments.folder_id = :topic_id';
+    $assignmentParameters['topic_id'] = $selectedTopicId;
+}
+
+$assignmentsSql .= '
      GROUP BY class_assignments.id
-     ORDER BY class_assignments.created_at DESC, class_assignments.id DESC'
-);
-$assignmentsStatement->execute(['class_id' => $classId]);
+     ORDER BY class_assignments.created_at DESC, class_assignments.id DESC';
+$assignmentsStatement = $pdo->prepare($assignmentsSql);
+$assignmentsStatement->execute($assignmentParameters);
 $assignments = $assignmentsStatement->fetchAll();
 
 $selectedTaskId = (int) ($_GET['task_id'] ?? $_POST['task_id'] ?? ($tasks[0]['id'] ?? 0));
@@ -767,14 +1418,21 @@ $teacherName = (string) ($class['display_teacher'] ?? '');
 $teacherInitials = $teacherName !== '' ? strtoupper(substr($teacherName, 0, 1)) : 'T';
 
 $successMessages = [
+    'learners_added' => 'Learners added successfully.',
+    'topic_created' => 'Topic added successfully.',
+    'topic_updated' => 'Topic updated successfully.',
+    'topic_deleted' => 'Topic deleted successfully.',
+    'folder_created' => 'Topic added successfully.',
     'material_created' => 'Learning material added successfully.',
+    'material_updated' => 'Learning material updated successfully.',
     'material_deleted' => 'Learning material deleted successfully.',
     'quiz_created' => 'Quiz added successfully.',
+    'quiz_updated' => 'Quiz updated successfully.',
     'quiz_deleted' => 'Quiz deleted successfully.',
     'assignment_created' => 'Assignment added successfully.',
     'assignment_deleted' => 'Assignment deleted successfully.',
-    'task_created' => 'Task added successfully.',
-    'task_deleted' => 'Task deleted successfully.',
+    'task_created' => 'Grade added successfully.',
+    'task_deleted' => 'Grade deleted successfully.',
     'grades_saved' => 'Grades saved successfully.',
 ];
 ?>
@@ -791,7 +1449,7 @@ $successMessages = [
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css" rel="stylesheet">
+  <link href="css/style.css?v=topics-organizer" rel="stylesheet">
 </head>
 <body class="dashboard-page class-workspace-page class-workspace-<?php echo e($tool); ?>">
   <div class="app-layout">
@@ -803,24 +1461,13 @@ $successMessages = [
           <small>Class Workspace</small>
         </span>
       </a>
-      <div class="class-sidebar-banner">
-        <?php if (!empty($class['banner_image'])): ?>
-          <button type="button" class="class-image-view-button learner-photo-viewer-button" data-bs-toggle="modal" data-bs-target="#learnerPhotoModal" data-photo="<?php echo e($class['banner_image']); ?>" data-name="<?php echo e($class['class_name']); ?> wallpaper" aria-label="View <?php echo e($class['class_name']); ?> wallpaper">
-            <img src="<?php echo e($class['banner_image']); ?>" alt="<?php echo e($class['class_name']); ?> wallpaper">
-          </button>
-        <?php else: ?>
-          <div class="class-sidebar-banner-placeholder">
-            <i class="fa-solid fa-image"></i>
-          </div>
-        <?php endif; ?>
-      </div>
       <nav class="sidebar-nav">
         <a class="<?php echo $tool === 'dashboard' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=dashboard"><i class="fa-solid fa-gauge-high"></i> Class Dashboard</a>
         <a class="<?php echo $tool === 'learners' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=learners"><i class="fa-solid fa-users"></i> Learners</a>
         <a class="<?php echo $tool === 'materials' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=materials"><i class="fa-solid fa-folder-open"></i> Materials</a>
         <a class="<?php echo $tool === 'quizzes' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=quizzes"><i class="fa-solid fa-circle-question"></i> Quizzes</a>
         <a class="<?php echo $tool === 'assignments' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=assignments"><i class="fa-solid fa-file-pen"></i> Assignments</a>
-        <a class="<?php echo $tool === 'tasks' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=tasks"><i class="fa-solid fa-list-check"></i> Tasks</a>
+        <a class="<?php echo $tool === 'tasks' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=tasks"><i class="fa-solid fa-list-check"></i> Topics</a>
         <a class="<?php echo $tool === 'grades' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=grades"><i class="fa-solid fa-star"></i> Grades</a>
         <a href="<?php echo $isTeacher ? 'teacher_dashboard.php' : 'classes.php'; ?>"><i class="fa-solid fa-arrow-left"></i> Back to Classes</a>
       </nav>
@@ -925,7 +1572,7 @@ $successMessages = [
                 <div class="col-md-6">
                   <div class="metric-card">
                     <span class="metric-icon bg-primary-subtle text-primary"><i class="fa-solid fa-list-check"></i></span>
-                    <p>Tasks</p>
+                    <p>Topics</p>
                     <h3><?php echo count($tasks); ?></h3>
                     <small class="text-secondary">Created for class</small>
                   </div>
@@ -935,7 +1582,7 @@ $successMessages = [
                     <span class="metric-icon bg-warning-subtle text-warning"><i class="fa-solid fa-star"></i></span>
                     <p>Grades</p>
                     <h3><?php echo $gradeCount; ?></h3>
-                    <small class="text-secondary">Saved task scores</small>
+                    <small class="text-secondary">Saved topic scores</small>
                   </div>
                 </div>
                 <div class="col-md-6">
@@ -958,7 +1605,14 @@ $successMessages = [
                 <span class="section-kicker">Learners</span>
                 <h2 class="h5 mb-0">Enrolled learners</h2>
               </div>
-              <span class="badge text-bg-primary"><?php echo count($learners); ?> total</span>
+              <div class="d-flex flex-wrap align-items-center gap-2">
+                <span class="badge text-bg-primary"><?php echo count($learners); ?> total</span>
+                <?php if ($isAdmin): ?>
+                  <button type="button" class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#addClassLearnersModal">
+                    <i class="fa-solid fa-user-plus me-2"></i>Add Learners
+                  </button>
+                <?php endif; ?>
+              </div>
             </div>
 
             <?php if (!$learners): ?>
@@ -998,21 +1652,53 @@ $successMessages = [
         <?php if ($tool === 'materials'): ?>
           <div class="panel-card">
             <div class="d-flex flex-wrap align-items-center justify-content-between gap-3 mb-4">
-              <div>
-                <span class="section-kicker">Learning Materials</span>
-                <h2 class="h5 mb-0">Class resources</h2>
+	              <div>
+	                <span class="section-kicker">Learning Materials</span>
+	                <h2 class="h5 mb-0"><?php echo $selectedTopic ? e($selectedTopic['name']) . ' resources' : 'Unassigned resources'; ?></h2>
               </div>
-              <button type="button" class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#materialModal">
-                <i class="fa-solid fa-plus me-2"></i>Add Material
-              </button>
+              <div class="d-flex flex-wrap align-items-center gap-2">
+                <button type="button" class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#materialModal">
+                  <i class="fa-solid fa-plus me-2"></i>Add Material
+                </button>
+              </div>
             </div>
 
-            <?php if (!$materials): ?>
+            <?php if (!$materialFolders && !$materials): ?>
               <div class="empty-state">
                 <i class="fa-solid fa-folder-open"></i>
-                <p>No learning materials have been uploaded yet.</p>
+                <p>No topics or learning materials have been added yet.</p>
               </div>
-            <?php else: ?>
+            <?php endif; ?>
+
+	            <?php if ($materialFolders): ?>
+	              <div class="material-folder-grid mb-4">
+	                <?php foreach ($materialFolders as $folder): ?>
+	                  <?php if ($selectedTopicId > 0 && $selectedTopicId !== (int) $folder['id']) { continue; } ?>
+	                  <?php $topicItemCount = (int) $folder['material_count'] + (int) $folder['quiz_count'] + (int) $folder['assignment_count']; ?>
+	                  <article class="material-folder-card material-topic-dropzone <?php echo $selectedTopicId === (int) $folder['id'] ? 'is-active' : ''; ?>" data-topic-id="<?php echo (int) $folder['id']; ?>">
+	                    <a class="material-folder-link" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=materials&topic_id=<?php echo (int) $folder['id']; ?>">
+                      <div class="material-folder-icon">
+                        <i class="fa-solid fa-folder"></i>
+                      </div>
+                      <div>
+                        <h3><?php echo e($folder['name']); ?></h3>
+                        <?php if (!empty($folder['description'])): ?>
+                          <p><?php echo e($folder['description']); ?></p>
+                        <?php endif; ?>
+                        <span><?php echo $topicItemCount; ?> items</span>
+                      </div>
+                    </a>
+	                    <?php if ($selectedTopicId === (int) $folder['id']): ?>
+	                      <a class="btn btn-sm btn-outline-secondary topic-back-button" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=materials">
+	                        <i class="fa-solid fa-arrow-left me-1"></i>Back
+	                      </a>
+	                    <?php endif; ?>
+	                  </article>
+	                <?php endforeach; ?>
+	              </div>
+	            <?php endif; ?>
+
+            <?php if ($materials): ?>
               <div class="material-grid">
                 <?php foreach ($materials as $material): ?>
                   <?php
@@ -1021,7 +1707,7 @@ $successMessages = [
                     $materialUrl = (string) ($material['external_url'] ?? '');
                     $openUrl = $materialPath !== '' ? $materialPath : $materialUrl;
                   ?>
-                  <article class="material-card">
+                  <article class="material-card material-draggable-card" draggable="true" data-material-id="<?php echo (int) $material['id']; ?>">
                     <div class="material-preview">
                       <?php if ($materialType === 'image' && $materialPath !== ''): ?>
                         <button type="button" class="class-image-view-button learner-photo-viewer-button" data-bs-toggle="modal" data-bs-target="#learnerPhotoModal" data-photo="<?php echo e($materialPath); ?>" data-name="<?php echo e($material['title']); ?>" aria-label="View <?php echo e($material['title']); ?>">
@@ -1039,24 +1725,32 @@ $successMessages = [
                     </div>
                     <div class="material-card-body">
                       <div class="d-flex align-items-start justify-content-between gap-2">
-                        <div>
-                          <span class="material-type"><?php echo e(strtoupper($materialType)); ?></span>
-                          <h3><?php echo e($material['title']); ?></h3>
-                        </div>
-                        <form method="post" onsubmit="return confirm('Delete this learning material?');">
-                          <input type="hidden" name="action" value="delete_material">
-                          <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
-                          <input type="hidden" name="tool" value="materials">
-                          <input type="hidden" name="material_id" value="<?php echo (int) $material['id']; ?>">
-                          <button type="submit" class="learner-icon-button is-danger" aria-label="Delete material">
-                            <i class="fa-solid fa-trash"></i>
-                          </button>
-                        </form>
-                      </div>
+	                        <div>
+	                          <span class="material-type"><?php echo e(strtoupper($materialType)); ?></span>
+	                          <h3><?php echo e($material['title']); ?></h3>
+	                        </div>
+	                        <div class="d-flex align-items-center gap-2">
+	                          <button type="button" class="learner-icon-button edit-material-button" data-bs-toggle="modal" data-bs-target="#editMaterialModal" data-material-id="<?php echo (int) $material['id']; ?>" data-title="<?php echo e($material['title']); ?>" data-description="<?php echo e((string) ($material['description'] ?? '')); ?>" data-topic-id="<?php echo (int) ($material['folder_id'] ?? 0); ?>" data-external-url="<?php echo e((string) ($material['external_url'] ?? '')); ?>" aria-label="Edit material">
+	                            <i class="fa-solid fa-pen"></i>
+	                          </button>
+	                          <form method="post" onsubmit="return confirm('Delete this learning material?');">
+	                            <input type="hidden" name="action" value="delete_material">
+	                            <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
+	                            <input type="hidden" name="tool" value="materials">
+	                            <input type="hidden" name="material_id" value="<?php echo (int) $material['id']; ?>">
+	                            <button type="submit" class="learner-icon-button is-danger" aria-label="Delete material">
+	                              <i class="fa-solid fa-trash"></i>
+	                            </button>
+	                          </form>
+	                        </div>
+	                      </div>
                       <?php if (!empty($material['description'])): ?>
                         <p><?php echo e($material['description']); ?></p>
                       <?php endif; ?>
-                      <div class="material-meta">
+	                      <div class="material-meta">
+                        <?php if (!empty($material['folder_name'])): ?>
+                          <span><i class="fa-solid fa-folder"></i><?php echo e($material['folder_name']); ?></span>
+                        <?php endif; ?>
                         <span><i class="fa-regular fa-calendar"></i><?php echo e(date('M d, Y', strtotime($material['created_at']))); ?></span>
                         <?php if (!empty($material['uploader_name'])): ?>
                           <span><i class="fa-regular fa-user"></i><?php echo e($material['uploader_name']); ?></span>
@@ -1068,8 +1762,18 @@ $successMessages = [
                         </a>
                       <?php endif; ?>
                     </div>
-                  </article>
-                <?php endforeach; ?>
+	                  </article>
+	                <?php endforeach; ?>
+	              </div>
+            <?php elseif ($selectedTopic): ?>
+              <div class="empty-state">
+                <i class="fa-solid fa-folder-open"></i>
+                <p>No learning materials are inside this topic yet.</p>
+              </div>
+            <?php elseif ($materialFolders): ?>
+              <div class="empty-state">
+                <i class="fa-solid fa-folder-open"></i>
+                <p>No unassigned learning materials. Click a topic to view organized resources.</p>
               </div>
             <?php endif; ?>
           </div>
@@ -1078,23 +1782,53 @@ $successMessages = [
         <?php if ($tool === 'quizzes'): ?>
           <div class="panel-card">
             <div class="d-flex flex-wrap align-items-center justify-content-between gap-3 mb-4">
-              <div>
-                <span class="section-kicker">Quizzes</span>
-                <h2 class="h5 mb-0">Multiple choice quizzes</h2>
+	              <div>
+	                <span class="section-kicker">Quizzes</span>
+	                <h2 class="h5 mb-0"><?php echo $selectedTopic ? e($selectedTopic['name']) . ' quizzes' : 'Multiple choice quizzes'; ?></h2>
+	              </div>
+	              <div class="d-flex flex-wrap align-items-center gap-2">
+	                <button type="button" class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#quizModal">
+	                  <i class="fa-solid fa-plus me-2"></i>Add Quiz
+	                </button>
               </div>
-              <button type="button" class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#quizModal">
-                <i class="fa-solid fa-plus me-2"></i>Add Quiz
-              </button>
             </div>
+
+            <?php if ($materialFolders): ?>
+              <div class="material-folder-grid mb-4">
+                <?php foreach ($materialFolders as $folder): ?>
+                  <?php if ($selectedTopicId > 0 && $selectedTopicId !== (int) $folder['id']) { continue; } ?>
+                  <article class="material-folder-card <?php echo $selectedTopicId === (int) $folder['id'] ? 'is-active' : ''; ?>">
+                    <a class="material-folder-link" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=quizzes&topic_id=<?php echo (int) $folder['id']; ?>">
+                      <div class="material-folder-icon">
+                        <i class="fa-solid fa-folder"></i>
+                      </div>
+                      <div>
+                        <h3><?php echo e($folder['name']); ?></h3>
+                        <?php if (!empty($folder['description'])): ?>
+                          <p><?php echo e($folder['description']); ?></p>
+                        <?php endif; ?>
+                        <span><?php echo (int) $folder['quiz_count']; ?> quizzes</span>
+                      </div>
+                    </a>
+                    <?php if ($selectedTopicId === (int) $folder['id']): ?>
+                      <a class="btn btn-sm btn-outline-secondary topic-back-button" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=quizzes">
+                        <i class="fa-solid fa-arrow-left me-1"></i>Back
+                      </a>
+                    <?php endif; ?>
+                  </article>
+                <?php endforeach; ?>
+              </div>
+            <?php endif; ?>
 
             <?php if (!$quizzes): ?>
               <div class="empty-state">
                 <i class="fa-solid fa-circle-question"></i>
-                <p>No quizzes have been created for this class yet.</p>
+                <p><?php echo $selectedTopic ? 'No quizzes are inside this topic yet.' : 'No quizzes have been created for this class yet.'; ?></p>
               </div>
             <?php else: ?>
               <div class="quiz-card-grid">
                 <?php foreach ($quizzes as $quiz): ?>
+                  <?php $quizQuestionsJson = json_encode($quizQuestionMap[(int) $quiz['id']] ?? [], JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT | JSON_HEX_TAG); ?>
                   <article class="quiz-card">
                     <div class="quiz-card-icon">
                       <i class="fa-solid fa-circle-question"></i>
@@ -1105,23 +1839,31 @@ $successMessages = [
                           <span class="material-type"><?php echo (int) $quiz['timer_minutes']; ?> MINUTES</span>
                           <h3><?php echo e($quiz['title']); ?></h3>
                         </div>
-                        <form method="post" onsubmit="return confirm('Delete this quiz and all attempts?');">
-                          <input type="hidden" name="action" value="delete_quiz">
-                          <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
-                          <input type="hidden" name="tool" value="quizzes">
-                          <input type="hidden" name="quiz_id" value="<?php echo (int) $quiz['id']; ?>">
-                          <button type="submit" class="learner-icon-button is-danger" aria-label="Delete quiz">
-                            <i class="fa-solid fa-trash"></i>
+                        <div class="d-flex align-items-center gap-2">
+                          <button type="button" class="learner-icon-button edit-quiz-button" data-bs-toggle="modal" data-bs-target="#editQuizModal" data-quiz-id="<?php echo (int) $quiz['id']; ?>" data-title="<?php echo e($quiz['title']); ?>" data-description="<?php echo e((string) ($quiz['description'] ?? '')); ?>" data-topic-id="<?php echo (int) ($quiz['folder_id'] ?? 0); ?>" data-timer-minutes="<?php echo (int) $quiz['timer_minutes']; ?>" data-status="<?php echo e((string) ($quiz['status'] ?? 'Active')); ?>" data-questions="<?php echo e((string) $quizQuestionsJson); ?>" aria-label="Edit quiz">
+                            <i class="fa-solid fa-pen"></i>
                           </button>
-                        </form>
+                          <form method="post" onsubmit="return confirm('Delete this quiz and all attempts?');">
+                            <input type="hidden" name="action" value="delete_quiz">
+                            <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
+                            <input type="hidden" name="tool" value="quizzes">
+                            <input type="hidden" name="quiz_id" value="<?php echo (int) $quiz['id']; ?>">
+                            <button type="submit" class="learner-icon-button is-danger" aria-label="Delete quiz">
+                              <i class="fa-solid fa-trash"></i>
+                            </button>
+                          </form>
+                        </div>
                       </div>
-                      <?php if (!empty($quiz['description'])): ?>
-                        <p><?php echo e($quiz['description']); ?></p>
-                      <?php endif; ?>
-                      <div class="quiz-stats">
-                        <span><strong><?php echo (int) $quiz['question_count']; ?></strong> questions</span>
-                        <span><strong><?php echo (int) $quiz['attempt_count']; ?></strong> attempts</span>
-                        <span><strong><?php echo number_format((float) $quiz['average_score'], 1); ?></strong> avg</span>
+	                      <?php if (!empty($quiz['description'])): ?>
+	                        <p><?php echo e($quiz['description']); ?></p>
+	                      <?php endif; ?>
+	                      <div class="quiz-stats">
+	                        <?php if (!empty($quiz['topic_name'])): ?>
+	                          <span><i class="fa-solid fa-folder me-1"></i><?php echo e($quiz['topic_name']); ?></span>
+	                        <?php endif; ?>
+	                        <span><strong><?php echo (int) $quiz['question_count']; ?></strong> questions</span>
+	                        <span><strong><?php echo (int) $quiz['attempt_count']; ?></strong> attempts</span>
+	                        <span><strong><?php echo number_format((float) $quiz['average_score'], 1); ?></strong> avg</span>
                       </div>
                     </div>
                   </article>
@@ -1134,19 +1876,48 @@ $successMessages = [
         <?php if ($tool === 'assignments'): ?>
           <div class="panel-card">
             <div class="d-flex flex-wrap align-items-center justify-content-between gap-3 mb-4">
-              <div>
-                <span class="section-kicker">Assignments</span>
-                <h2 class="h5 mb-0">Learner work requirements</h2>
+	              <div>
+	                <span class="section-kicker">Assignments</span>
+	                <h2 class="h5 mb-0"><?php echo $selectedTopic ? e($selectedTopic['name']) . ' assignments' : 'Learner work requirements'; ?></h2>
+	              </div>
+	              <div class="d-flex flex-wrap align-items-center gap-2">
+	                <button type="button" class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#assignmentModal">
+	                  <i class="fa-solid fa-plus me-2"></i>Add Assignment
+	                </button>
               </div>
-              <button type="button" class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#assignmentModal">
-                <i class="fa-solid fa-plus me-2"></i>Add Assignment
-              </button>
             </div>
+
+            <?php if ($materialFolders): ?>
+              <div class="material-folder-grid mb-4">
+                <?php foreach ($materialFolders as $folder): ?>
+                  <?php if ($selectedTopicId > 0 && $selectedTopicId !== (int) $folder['id']) { continue; } ?>
+                  <article class="material-folder-card <?php echo $selectedTopicId === (int) $folder['id'] ? 'is-active' : ''; ?>">
+                    <a class="material-folder-link" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=assignments&topic_id=<?php echo (int) $folder['id']; ?>">
+                      <div class="material-folder-icon">
+                        <i class="fa-solid fa-folder"></i>
+                      </div>
+                      <div>
+                        <h3><?php echo e($folder['name']); ?></h3>
+                        <?php if (!empty($folder['description'])): ?>
+                          <p><?php echo e($folder['description']); ?></p>
+                        <?php endif; ?>
+                        <span><?php echo (int) $folder['assignment_count']; ?> assignments</span>
+                      </div>
+                    </a>
+                    <?php if ($selectedTopicId === (int) $folder['id']): ?>
+                      <a class="btn btn-sm btn-outline-secondary topic-back-button" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=assignments">
+                        <i class="fa-solid fa-arrow-left me-1"></i>Back
+                      </a>
+                    <?php endif; ?>
+                  </article>
+                <?php endforeach; ?>
+              </div>
+            <?php endif; ?>
 
             <?php if (!$assignments): ?>
               <div class="empty-state">
                 <i class="fa-solid fa-file-pen"></i>
-                <p>No assignments have been created for this class yet.</p>
+                <p><?php echo $selectedTopic ? 'No assignments are inside this topic yet.' : 'No assignments have been created for this class yet.'; ?></p>
               </div>
             <?php else: ?>
               <div class="quiz-card-grid">
@@ -1173,11 +1944,14 @@ $successMessages = [
                           </button>
                         </form>
                       </div>
-                      <?php if (!empty($assignment['instructions'])): ?>
-                        <p><?php echo e($assignment['instructions']); ?></p>
-                      <?php endif; ?>
-                      <div class="quiz-stats">
-                        <span><strong><?php echo (int) $assignment['submission_count']; ?></strong> submissions</span>
+	                      <?php if (!empty($assignment['instructions'])): ?>
+	                        <p><?php echo e($assignment['instructions']); ?></p>
+	                      <?php endif; ?>
+	                      <div class="quiz-stats">
+	                        <?php if (!empty($assignment['topic_name'])): ?>
+	                          <span><i class="fa-solid fa-folder me-1"></i><?php echo e($assignment['topic_name']); ?></span>
+	                        <?php endif; ?>
+	                        <span><strong><?php echo (int) $assignment['submission_count']; ?></strong> submissions</span>
                         <?php if (!empty($assignment['attachment_path'])): ?>
                           <span><i class="fa-solid fa-paperclip me-1"></i> Attachment</span>
                         <?php endif; ?>
@@ -1199,18 +1973,65 @@ $successMessages = [
           <div class="panel-card">
             <div class="d-flex flex-wrap align-items-center justify-content-between gap-3 mb-4">
               <div>
-                <span class="section-kicker">Tasks</span>
-                <h2 class="h5 mb-0">Manage class tasks</h2>
+                <span class="section-kicker">Topics</span>
+                <h2 class="h5 mb-0">Class topic library</h2>
+              </div>
+              <button type="button" class="btn btn-sm btn-outline-primary add-topic-button" data-bs-toggle="modal" data-bs-target="#materialFolderModal" data-return-tool="tasks">
+                <i class="fa-solid fa-plus me-2"></i>Add Topic
+              </button>
+            </div>
+            <?php if (!$materialFolders): ?>
+              <div class="empty-state">
+                <i class="fa-solid fa-folder-open"></i>
+                <p>No class topics yet.</p>
+              </div>
+            <?php else: ?>
+              <div class="material-folder-grid mb-5">
+                <?php foreach ($materialFolders as $folder): ?>
+                  <?php $topicTotalCount = (int) $folder['material_count'] + (int) $folder['quiz_count'] + (int) $folder['assignment_count'] + (int) ($folder['grade_item_count'] ?? 0); ?>
+                  <article class="material-folder-card">
+                    <a class="material-folder-link" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=materials&topic_id=<?php echo (int) $folder['id']; ?>">
+                      <span class="material-folder-icon"><i class="fa-solid fa-folder"></i></span>
+                      <span>
+                        <strong><?php echo e($folder['name']); ?></strong>
+                        <small><?php echo $topicTotalCount; ?> items</small>
+                      </span>
+                    </a>
+                    <div class="material-folder-actions">
+                      <button type="button" class="learner-icon-button edit-topic-button" data-bs-toggle="modal" data-bs-target="#editTopicModal" data-topic-id="<?php echo (int) $folder['id']; ?>" data-name="<?php echo e($folder['name']); ?>" data-description="<?php echo e((string) ($folder['description'] ?? '')); ?>" data-return-tool="tasks" aria-label="Edit topic">
+                        <i class="fa-solid fa-pen"></i>
+                      </button>
+                      <form method="post" class="d-inline" onsubmit="return confirm('Delete this topic? Linked records will be unassigned only.');">
+                        <input type="hidden" name="action" value="delete_material_folder">
+                        <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
+                        <input type="hidden" name="tool" value="tasks">
+                        <input type="hidden" name="return_tool" value="tasks">
+                        <input type="hidden" name="folder_id" value="<?php echo (int) $folder['id']; ?>">
+                        <button type="submit" class="learner-icon-button text-danger" aria-label="Delete topic">
+                          <i class="fa-solid fa-trash"></i>
+                        </button>
+                      </form>
+                    </div>
+                  </article>
+                <?php endforeach; ?>
+              </div>
+            <?php endif; ?>
+
+            <div class="d-flex flex-wrap align-items-center justify-content-between gap-3 mb-4">
+              <div>
+                <span class="section-kicker">Grades</span>
+                <h2 class="h5 mb-0">Grade items</h2>
               </div>
               <button type="button" class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#taskModal">
-                <i class="fa-solid fa-plus me-2"></i>Add Task
+                <i class="fa-solid fa-plus me-2"></i>Add Grade
               </button>
             </div>
             <div class="table-responsive">
               <table class="table align-middle">
                 <thead>
                   <tr>
-                    <th>Task</th>
+                    <th>Grade</th>
+                    <th>Topic</th>
                     <th>Date</th>
                     <th>Grades</th>
                     <th>Average</th>
@@ -1219,7 +2040,7 @@ $successMessages = [
                 </thead>
                 <tbody>
                   <?php if (!$tasks): ?>
-                    <tr><td colspan="5" class="text-center text-secondary py-5">No tasks yet.</td></tr>
+                    <tr><td colspan="6" class="text-center text-secondary py-5">No grade items yet.</td></tr>
                   <?php endif; ?>
                   <?php foreach ($tasks as $taskRow): ?>
                     <tr>
@@ -1229,12 +2050,13 @@ $successMessages = [
                           <br><span class="text-secondary small"><?php echo e($taskRow['description']); ?></span>
                         <?php endif; ?>
                       </td>
+                      <td><?php echo !empty($taskRow['topic_name']) ? e($taskRow['topic_name']) : '<span class="text-secondary">Unassigned</span>'; ?></td>
                       <td><?php echo e(date('M d, Y', strtotime($taskRow['task_date']))); ?></td>
                       <td><?php echo (int) $taskRow['grade_count']; ?></td>
                       <td><?php echo number_format((float) $taskRow['average_score'], 2); ?></td>
                       <td class="text-end">
                         <a class="btn btn-sm btn-outline-primary" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=grades&task_id=<?php echo (int) $taskRow['id']; ?>">Manage Grades</a>
-                        <form method="post" class="d-inline" onsubmit="return confirm('Delete this task and its grades?');">
+	                        <form method="post" class="d-inline" onsubmit="return confirm('Delete this topic and its grades?');">
                           <input type="hidden" name="action" value="delete_task">
                           <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
                           <input type="hidden" name="tool" value="tasks">
@@ -1255,26 +2077,26 @@ $successMessages = [
             <div class="d-flex flex-wrap align-items-center justify-content-between gap-3 mb-4">
               <div>
                 <span class="section-kicker">Grades</span>
-                <h2 class="h5 mb-0">Manage task grades</h2>
+                <h2 class="h5 mb-0">Manage topic grades</h2>
               </div>
-              <a href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=tasks" class="btn btn-sm btn-outline-primary">Manage Tasks</a>
+              <a href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=tasks" class="btn btn-sm btn-outline-primary">Manage Topics</a>
             </div>
 
             <?php if (!$tasks): ?>
               <div class="empty-state">
                 <i class="fa-solid fa-list-check"></i>
-                <p>Add a task first before encoding grades.</p>
+                <p>Add a topic first before encoding grades.</p>
               </div>
             <?php else: ?>
               <form method="get" class="module-form mb-4">
                 <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
                 <input type="hidden" name="tool" value="grades">
-                <label class="form-label" for="task_id_filter">Task</label>
+                <label class="form-label" for="task_id_filter">Topic</label>
                 <div class="input-group">
                   <select class="form-select" id="task_id_filter" name="task_id">
                     <?php foreach ($tasks as $taskRow): ?>
                       <option value="<?php echo (int) $taskRow['id']; ?>" <?php echo $selectedTask && (int) $selectedTask['id'] === (int) $taskRow['id'] ? 'selected' : ''; ?>>
-                        <?php echo e($taskRow['task_title']); ?>
+                        <?php echo e($taskRow['task_title'] . (!empty($taskRow['topic_name']) ? ' - ' . $taskRow['topic_name'] : '')); ?>
                       </option>
                     <?php endforeach; ?>
                   </select>
@@ -1329,6 +2151,90 @@ $successMessages = [
     </main>
   </div>
 
+  <div class="modal fade" id="addClassLearnersModal" tabindex="-1" aria-labelledby="addClassLearnersModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable class-learner-picker-modal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <div>
+            <span class="section-kicker">Add Learners</span>
+            <h2 class="modal-title h5" id="addClassLearnersModalLabel">Select learners for <?php echo e($class['class_name']); ?></h2>
+          </div>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <form method="post" class="module-form">
+          <div class="modal-body">
+            <input type="hidden" name="action" value="add_class_learners">
+            <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
+            <input type="hidden" name="tool" value="learners">
+            <div class="row g-3 mb-4">
+              <div class="col-lg-8">
+                <div class="input-group">
+                  <span class="input-group-text"><i class="fa-solid fa-magnifying-glass"></i></span>
+                  <input type="search" class="form-control" id="classLearnerSearch" placeholder="Search learner name, number, email, or phone">
+                </div>
+              </div>
+              <div class="col-lg-4">
+                <select class="form-select" id="classLearnerStatusFilter" aria-label="Filter learners by status">
+                  <option value="">All statuses</option>
+                  <option value="active">Active</option>
+                  <option value="on hold">On Hold</option>
+                  <option value="completed">Completed</option>
+                </select>
+              </div>
+            </div>
+
+            <?php if (!$availableLearners): ?>
+              <div class="empty-state">
+                <i class="fa-solid fa-circle-check"></i>
+                <p>All learners are already added to this class.</p>
+              </div>
+            <?php else: ?>
+              <div class="class-learner-picker-grid" id="classLearnerPickerGrid">
+                <?php foreach ($availableLearners as $availableLearner): ?>
+                  <?php
+                    $availableName = trim($availableLearner['first_name'] . ' ' . $availableLearner['last_name']);
+                    $availableInitials = strtoupper(substr($availableLearner['first_name'], 0, 1) . substr($availableLearner['last_name'], 0, 1));
+                    $availableStatus = strtolower((string) $availableLearner['status']);
+                    $availableSearch = strtolower(trim($availableName . ' ' . $availableLearner['learner_number'] . ' ' . ($availableLearner['email'] ?? '') . ' ' . ($availableLearner['phone'] ?? '')));
+                  ?>
+                  <label class="class-learner-picker-card" data-search="<?php echo e($availableSearch); ?>" data-status="<?php echo e($availableStatus); ?>">
+                    <input type="checkbox" name="learner_ids[]" value="<?php echo (int) $availableLearner['id']; ?>">
+                    <span class="class-learner-picker-photo">
+                      <?php if (!empty($availableLearner['profile_photo'])): ?>
+                        <img src="<?php echo e($availableLearner['profile_photo']); ?>" alt="<?php echo e($availableName); ?>">
+                      <?php else: ?>
+                        <span><?php echo e($availableInitials); ?></span>
+                      <?php endif; ?>
+                    </span>
+                    <span class="class-learner-picker-info">
+                      <strong><?php echo e($availableName); ?></strong>
+                      <small><?php echo e($availableLearner['learner_number']); ?></small>
+                      <?php if (!empty($availableLearner['email'])): ?>
+                        <small><?php echo e($availableLearner['email']); ?></small>
+                      <?php endif; ?>
+                    </span>
+                    <span class="class-learner-picker-status"><?php echo e($availableLearner['status']); ?></span>
+                  </label>
+                <?php endforeach; ?>
+              </div>
+              <div class="empty-state d-none" id="classLearnerNoResults">
+                <i class="fa-solid fa-magnifying-glass"></i>
+                <p>No available learners match your filter.</p>
+              </div>
+            <?php endif; ?>
+          </div>
+          <div class="modal-footer">
+            <span class="text-secondary small me-auto" id="classLearnerSelectedCount">0 selected</span>
+            <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+            <button type="submit" class="btn btn-primary" <?php echo !$availableLearners ? 'disabled' : ''; ?>>
+              <i class="fa-solid fa-user-plus me-2"></i>Add Selected
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
   <div class="modal fade" id="learnerPhotoModal" tabindex="-1" aria-labelledby="learnerPhotoModalLabel" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered modal-lg">
       <div class="modal-content image-preview-modal">
@@ -1343,13 +2249,86 @@ $successMessages = [
     </div>
   </div>
 
-  <div class="modal fade" id="taskModal" tabindex="-1" aria-labelledby="taskModalLabel" aria-hidden="true">
+  <div class="modal fade" id="materialFolderModal" tabindex="-1" aria-labelledby="materialFolderModalLabel" aria-hidden="true" data-bs-backdrop="static">
+    <div class="modal-dialog modal-md modal-dialog-centered">
+      <div class="modal-content">
+        <div class="modal-header">
+          <div>
+            <span class="section-kicker">Topic</span>
+            <h2 class="modal-title h5" id="materialFolderModalLabel">Add topic</h2>
+          </div>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <form method="post" class="module-form">
+          <div class="modal-body">
+            <input type="hidden" name="action" value="save_material_folder">
+            <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
+            <input type="hidden" name="tool" value="materials">
+            <input type="hidden" id="topic_return_tool" name="return_tool" value="<?php echo e($tool); ?>">
+            <div class="mb-3">
+              <label class="form-label" for="folder_name">Topic name</label>
+              <input type="text" class="form-control" id="folder_name" name="folder_name" required>
+            </div>
+            <div>
+              <label class="form-label" for="folder_description">Description</label>
+              <textarea class="form-control" id="folder_description" name="folder_description" rows="3" placeholder="Optional topic notes"></textarea>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+            <button type="submit" class="btn btn-primary">
+              <i class="fa-solid fa-folder-plus me-2"></i>Save Topic
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal fade" id="editTopicModal" tabindex="-1" aria-labelledby="editTopicModalLabel" aria-hidden="true" data-bs-backdrop="static">
+    <div class="modal-dialog modal-md modal-dialog-centered">
+      <div class="modal-content">
+        <div class="modal-header">
+          <div>
+            <span class="section-kicker">Topic</span>
+            <h2 class="modal-title h5" id="editTopicModalLabel">Edit topic</h2>
+          </div>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <form method="post" class="module-form">
+          <div class="modal-body">
+            <input type="hidden" name="action" value="update_material_folder">
+            <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
+            <input type="hidden" name="tool" value="materials">
+            <input type="hidden" id="edit_topic_id" name="folder_id">
+            <input type="hidden" id="edit_topic_return_tool" name="return_tool" value="<?php echo e($tool); ?>">
+            <div class="mb-3">
+              <label class="form-label" for="edit_topic_name">Topic name</label>
+              <input type="text" class="form-control" id="edit_topic_name" name="folder_name" required>
+            </div>
+            <div>
+              <label class="form-label" for="edit_topic_description">Description</label>
+              <textarea class="form-control" id="edit_topic_description" name="folder_description" rows="3" placeholder="Optional topic notes"></textarea>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+            <button type="submit" class="btn btn-primary">
+              <i class="fa-solid fa-floppy-disk me-2"></i>Save Topic
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal fade" id="taskModal" tabindex="-1" aria-labelledby="taskModalLabel" aria-hidden="true" data-bs-backdrop="static">
     <div class="modal-dialog modal-dialog-centered">
       <div class="modal-content">
         <div class="modal-header">
           <div>
-            <span class="section-kicker">Task</span>
-            <h2 class="modal-title h5" id="taskModalLabel">Add task</h2>
+            <span class="section-kicker">Grade</span>
+            <h2 class="modal-title h5" id="taskModalLabel">Add grade</h2>
           </div>
           <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
         </div>
@@ -1359,11 +2338,20 @@ $successMessages = [
             <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
             <input type="hidden" name="tool" value="tasks">
             <div class="mb-3">
-              <label class="form-label" for="task_title">Task title</label>
+              <label class="form-label" for="task_topic_id">Class topic</label>
+              <select class="form-select" id="task_topic_id" name="task_topic_id">
+                <option value="0">Unassigned</option>
+                <?php foreach ($materialFolders as $folder): ?>
+                  <option value="<?php echo (int) $folder['id']; ?>"><?php echo e($folder['name']); ?></option>
+                <?php endforeach; ?>
+              </select>
+            </div>
+            <div class="mb-3">
+              <label class="form-label" for="task_title">Grade title</label>
               <input type="text" class="form-control" id="task_title" name="task_title" required>
             </div>
             <div class="mb-3">
-              <label class="form-label" for="task_date">Task date</label>
+              <label class="form-label" for="task_date">Grade date</label>
               <input type="date" class="form-control" id="task_date" name="task_date" value="<?php echo e(date('Y-m-d')); ?>" required>
             </div>
             <div>
@@ -1373,14 +2361,64 @@ $successMessages = [
           </div>
           <div class="modal-footer">
             <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
-            <button type="submit" class="btn btn-primary">Save Task</button>
+            <button type="submit" class="btn btn-primary">Save Grade</button>
           </div>
         </form>
       </div>
     </div>
   </div>
 
-  <div class="modal fade" id="materialModal" tabindex="-1" aria-labelledby="materialModalLabel" aria-hidden="true">
+  <div class="modal fade" id="editMaterialModal" tabindex="-1" aria-labelledby="editMaterialModalLabel" aria-hidden="true" data-bs-backdrop="static">
+    <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+      <div class="modal-content">
+        <div class="modal-header">
+          <div>
+            <span class="section-kicker">Learning Material</span>
+            <h2 class="modal-title h5" id="editMaterialModalLabel">Edit material</h2>
+          </div>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <form method="post" class="module-form">
+          <div class="modal-body">
+            <input type="hidden" name="action" value="update_material">
+            <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
+            <input type="hidden" name="tool" value="materials">
+            <input type="hidden" id="edit_material_id" name="material_id">
+            <div class="mb-3">
+              <label class="form-label" for="edit_material_title">Title</label>
+              <input type="text" class="form-control" id="edit_material_title" name="material_title" required>
+            </div>
+            <div class="mb-3">
+              <label class="form-label" for="edit_material_description">Description</label>
+              <textarea class="form-control" id="edit_material_description" name="material_description" rows="3"></textarea>
+            </div>
+            <div class="mb-3">
+              <label class="form-label" for="edit_material_folder_id">Topic</label>
+              <select class="form-select" id="edit_material_folder_id" name="material_folder_id">
+                <option value="0">No topic</option>
+                <?php foreach ($materialFolders as $folder): ?>
+                  <option value="<?php echo (int) $folder['id']; ?>"><?php echo e($folder['name']); ?></option>
+                <?php endforeach; ?>
+              </select>
+            </div>
+            <div class="mb-0">
+              <label class="form-label" for="edit_material_external_url">External link</label>
+              <input type="url" class="form-control" id="edit_material_external_url" name="material_external_url" placeholder="https://">
+              <div class="form-text">Only link resources use this field. Uploaded files keep their saved file.</div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+            <button type="submit" class="btn btn-primary">
+              <i class="fa-solid fa-floppy-disk me-2"></i>Save Changes
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal fade" id="materialModal" tabindex="-1" aria-labelledby="materialModalLabel" aria-hidden="true" data-bs-backdrop="static">
     <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
       <div class="modal-content">
         <div class="modal-header">
@@ -1403,20 +2441,52 @@ $successMessages = [
               <label class="form-label" for="material_description">Description</label>
               <textarea class="form-control" id="material_description" name="material_description" rows="3" placeholder="Optional notes for learners"></textarea>
             </div>
-            <div class="row g-3">
-              <div class="col-md-6">
-                <label class="form-label" for="material_file">Upload file</label>
-                <input type="file" class="form-control" id="material_file" name="material_file">
-                <div class="form-text">Use this for images, videos, PDFs, or other class files.</div>
+            <div class="mb-3">
+              <label class="form-label" for="material_folder_id">Topic</label>
+              <select class="form-select" id="material_folder_id" name="material_folder_id">
+                <option value="0">No topic</option>
+                <?php foreach ($materialFolders as $folder): ?>
+                  <option value="<?php echo (int) $folder['id']; ?>"><?php echo e($folder['name']); ?></option>
+                <?php endforeach; ?>
+              </select>
+              <div class="form-text">Select a topic first if you want to organize this material.</div>
+            </div>
+            <div class="mb-4">
+              <span class="form-label d-block">Attachment</span>
+              <input type="file" class="visually-hidden" id="material_files" name="material_files[]" multiple>
+              <label class="material-upload-zone" id="materialDropZone" for="material_files" role="button" tabindex="0">
+                <i class="fa-solid fa-cloud-arrow-up"></i>
+                <strong>Drag &amp; drop files here</strong>
+                <span>or click to browse (multiple files allowed)</span>
+              </label>
+              <div class="material-selected-panel d-none" id="materialFilePanel">
+                <div class="material-selected-header">
+                  <strong id="materialFileCount">0 files selected</strong>
+                  <span>Pending upload</span>
+                </div>
+                <div class="material-file-list" id="materialFileList"></div>
               </div>
-              <div class="col-md-6">
-                <label class="form-label" for="material_url">YouTube or website link</label>
-                <input type="url" class="form-control" id="material_url" name="material_url" placeholder="https://">
-                <div class="form-text">Use this for YouTube, Google Drive, or any online resource.</div>
+              <div class="form-text">App limit: 200GB per file. Your PHP and Apache settings must also allow very large uploads.</div>
+            </div>
+            <div class="material-link-section">
+              <div class="d-flex align-items-center justify-content-between gap-3 mb-2">
+                <label class="form-label mb-0" for="material_url_0">External Links</label>
+                <button type="button" class="btn btn-sm btn-outline-primary" id="addMaterialLink">
+                  <i class="fa-solid fa-plus me-1"></i>Add Link
+                </button>
               </div>
+              <div class="material-link-list" id="materialLinkList">
+                <div class="material-link-row">
+                  <input type="url" class="form-control" id="material_url_0" name="material_urls[]" placeholder="https://youtube.com/... or https://drive.google.com/...">
+                  <button type="button" class="btn btn-outline-secondary material-link-remove" aria-label="Remove link">
+                    <i class="fa-solid fa-xmark"></i>
+                  </button>
+                </div>
+              </div>
+              <div class="form-text">Links are saved separately from uploaded files. Add as many YouTube, Drive, or website links as needed.</div>
             </div>
             <div class="alert alert-info mt-3 mb-0">
-              Add either a file or a link. If both are provided, the uploaded file will be used.
+              Add files, links, or both. Every file and every link will become its own class material.
             </div>
           </div>
           <div class="modal-footer">
@@ -1430,7 +2500,7 @@ $successMessages = [
     </div>
   </div>
 
-  <div class="modal fade" id="quizModal" tabindex="-1" aria-labelledby="quizModalLabel" aria-hidden="true">
+  <div class="modal fade" id="quizModal" tabindex="-1" aria-labelledby="quizModalLabel" aria-hidden="true" data-bs-backdrop="static">
     <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
       <div class="modal-content">
         <div class="modal-header">
@@ -1454,6 +2524,16 @@ $successMessages = [
                 <label class="form-label" for="timer_minutes">Timer minutes</label>
                 <input type="number" class="form-control" id="timer_minutes" name="timer_minutes" min="1" max="240" value="10" required>
               </div>
+            </div>
+            <div class="mt-3">
+              <label class="form-label" for="quiz_topic_id">Topic</label>
+              <select class="form-select" id="quiz_topic_id" name="quiz_topic_id">
+                <option value="0">No topic</option>
+                <?php foreach ($materialFolders as $folder): ?>
+                  <option value="<?php echo (int) $folder['id']; ?>"><?php echo e($folder['name']); ?></option>
+                <?php endforeach; ?>
+              </select>
+              <div class="form-text">Select a topic first if you want to organize this quiz.</div>
             </div>
             <div class="mt-3">
               <label class="form-label" for="quiz_description">Description</label>
@@ -1500,6 +2580,98 @@ $successMessages = [
     </div>
   </div>
 
+  <div class="modal fade" id="editQuizModal" tabindex="-1" aria-labelledby="editQuizModalLabel" aria-hidden="true" data-bs-backdrop="static">
+    <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+      <div class="modal-content">
+        <div class="modal-header">
+          <div>
+            <span class="section-kicker">Quiz</span>
+            <h2 class="modal-title h5" id="editQuizModalLabel">Edit quiz</h2>
+          </div>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <form method="post" class="module-form">
+          <div class="modal-body">
+            <input type="hidden" name="action" value="update_quiz">
+            <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
+            <input type="hidden" name="tool" value="quizzes">
+            <input type="hidden" id="edit_quiz_id" name="quiz_id">
+            <div class="row g-3">
+              <div class="col-md-8">
+                <label class="form-label" for="edit_quiz_title">Quiz title</label>
+                <input type="text" class="form-control" id="edit_quiz_title" name="quiz_title" required>
+              </div>
+              <div class="col-md-4">
+                <label class="form-label" for="edit_timer_minutes">Timer minutes</label>
+                <input type="number" class="form-control" id="edit_timer_minutes" name="timer_minutes" min="1" max="240" required>
+              </div>
+            </div>
+            <div class="row g-3 mt-1">
+              <div class="col-md-8">
+                <label class="form-label" for="edit_quiz_topic_id">Topic</label>
+                <select class="form-select" id="edit_quiz_topic_id" name="quiz_topic_id">
+                  <option value="0">No topic</option>
+                  <?php foreach ($materialFolders as $folder): ?>
+                    <option value="<?php echo (int) $folder['id']; ?>"><?php echo e($folder['name']); ?></option>
+                  <?php endforeach; ?>
+                </select>
+              </div>
+              <div class="col-md-4">
+                <label class="form-label" for="edit_quiz_status">Status</label>
+                <select class="form-select" id="edit_quiz_status" name="quiz_status">
+                  <option value="Active">Active</option>
+                  <option value="Inactive">Inactive</option>
+                </select>
+              </div>
+            </div>
+            <div class="mt-3">
+              <label class="form-label" for="edit_quiz_description">Description</label>
+              <textarea class="form-control" id="edit_quiz_description" name="quiz_description" rows="3" placeholder="Optional instructions for learners"></textarea>
+            </div>
+            <div class="alert alert-warning mt-3 mb-0">
+              Saving question changes refreshes the answer key and clears existing learner attempts for this quiz.
+            </div>
+            <div class="d-flex align-items-center justify-content-between gap-3 mt-4 mb-3">
+              <h3 class="h6 mb-0">Questions</h3>
+              <button type="button" class="btn btn-sm btn-outline-primary" id="addEditQuizQuestion">
+                <i class="fa-solid fa-plus me-2"></i>Add Question
+              </button>
+            </div>
+            <div id="editQuizQuestions">
+              <div class="quiz-question-builder" data-question-index="0">
+                <div class="d-flex align-items-center justify-content-between mb-3">
+                  <strong>Question 1</strong>
+                  <button type="button" class="btn btn-sm btn-outline-danger remove-quiz-question" disabled>Remove</button>
+                </div>
+                <label class="form-label">Question text</label>
+                <textarea class="form-control mb-3" name="questions[0][text]" rows="2" required></textarea>
+                <div class="row g-3">
+                  <?php for ($choiceIndex = 0; $choiceIndex < 4; $choiceIndex++): ?>
+                    <div class="col-md-6">
+                      <label class="form-label">Choice <?php echo $choiceIndex + 1; ?></label>
+                      <div class="input-group">
+                        <span class="input-group-text">
+                          <input class="form-check-input mt-0" type="radio" name="questions[0][correct]" value="<?php echo $choiceIndex; ?>" <?php echo $choiceIndex === 0 ? 'checked' : ''; ?> aria-label="Correct answer">
+                        </span>
+                        <input type="text" class="form-control" name="questions[0][choices][<?php echo $choiceIndex; ?>]" required>
+                      </div>
+                    </div>
+                  <?php endfor; ?>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+            <button type="submit" class="btn btn-primary">
+              <i class="fa-solid fa-floppy-disk me-2"></i>Save Changes
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
   <div class="modal fade" id="assignmentModal" tabindex="-1" aria-labelledby="assignmentModalLabel" aria-hidden="true">
     <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
       <div class="modal-content">
@@ -1526,6 +2698,16 @@ $successMessages = [
               </div>
             </div>
             <div class="mt-3">
+              <label class="form-label" for="assignment_topic_id">Topic</label>
+              <select class="form-select" id="assignment_topic_id" name="assignment_topic_id">
+                <option value="0">No topic</option>
+                <?php foreach ($materialFolders as $folder): ?>
+                  <option value="<?php echo (int) $folder['id']; ?>"><?php echo e($folder['name']); ?></option>
+                <?php endforeach; ?>
+              </select>
+              <div class="form-text">Select a topic first if you want to organize this assignment.</div>
+            </div>
+            <div class="mt-3">
               <label class="form-label" for="assignment_instructions">Instructions</label>
               <textarea class="form-control" id="assignment_instructions" name="assignment_instructions" rows="5" placeholder="Tell learners what they need to do."></textarea>
             </div>
@@ -1550,44 +2732,114 @@ $successMessages = [
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
   <script>
     (function () {
-      var quizQuestions = document.getElementById('quizQuestions');
-      var addButton = document.getElementById('addQuizQuestion');
-      var nextQuestionIndex = 1;
+      function refreshQuizQuestionLabels(container) {
+        if (!container) {
+          return;
+        }
 
-      function refreshQuizQuestionLabels() {
-        quizQuestions.querySelectorAll('.quiz-question-builder').forEach(function (block, index) {
+        container.querySelectorAll('.quiz-question-builder').forEach(function (block, index) {
           block.querySelector('strong').textContent = 'Question ' + (index + 1);
           var removeButton = block.querySelector('.remove-quiz-question');
-          removeButton.disabled = quizQuestions.querySelectorAll('.quiz-question-builder').length === 1;
+          removeButton.disabled = container.querySelectorAll('.quiz-question-builder').length === 1;
         });
       }
 
-      if (quizQuestions && addButton) {
-        addButton.addEventListener('click', function () {
-          var nextIndex = nextQuestionIndex++;
-          var clone = quizQuestions.querySelector('.quiz-question-builder').cloneNode(true);
-          clone.dataset.questionIndex = String(nextIndex);
-          clone.querySelectorAll('textarea, input').forEach(function (field) {
-            field.name = field.name.replace(/questions\\[\\d+\\]/, 'questions[' + nextIndex + ']');
-            if (field.type === 'radio') {
-              field.checked = field.value === '0';
-            } else {
-              field.value = '';
-            }
-          });
-          quizQuestions.appendChild(clone);
-          refreshQuizQuestionLabels();
+      function buildQuizQuestionBlock(template, index, question) {
+        var clone = template.cloneNode(true);
+        var choices = question && Array.isArray(question.choices) ? question.choices : ['', '', '', ''];
+        var correct = question ? Number(question.correct || 0) : 0;
+
+        clone.dataset.questionIndex = String(index);
+        clone.querySelectorAll('textarea, input').forEach(function (field) {
+          field.name = field.name.replace(/questions\[\d+\]/, 'questions[' + index + ']');
+
+          if (field.matches('textarea')) {
+            field.value = question && question.text ? question.text : '';
+            return;
+          }
+
+          if (field.type === 'radio') {
+            field.checked = Number(field.value) === correct;
+            return;
+          }
+
+          var choiceMatch = field.name.match(/choices\]\[(\d+)\]/);
+          field.value = choiceMatch ? (choices[Number(choiceMatch[1])] || '') : '';
         });
 
-        quizQuestions.addEventListener('click', function (event) {
+        return clone;
+      }
+
+      function addQuizQuestion(container) {
+        if (!container) {
+          return;
+        }
+
+        var template = container.querySelector('.quiz-question-builder');
+        var nextIndex = container.querySelectorAll('.quiz-question-builder').length;
+
+        container.appendChild(buildQuizQuestionBlock(template, nextIndex, null));
+        refreshQuizQuestionLabels(container);
+      }
+
+      function bindQuizQuestionBuilder(containerId, buttonId) {
+        var container = document.getElementById(containerId);
+        var addButton = document.getElementById(buttonId);
+
+        if (!container || !addButton) {
+          return;
+        }
+
+        addButton.addEventListener('click', function () {
+          addQuizQuestion(container);
+        });
+
+        container.addEventListener('click', function (event) {
           if (event.target.classList.contains('remove-quiz-question')) {
             event.target.closest('.quiz-question-builder').remove();
-            refreshQuizQuestionLabels();
+            refreshQuizQuestionLabels(container);
+          }
+        });
+
+        refreshQuizQuestionLabels(container);
+      }
+
+      window.renderEditQuizQuestions = function (questions) {
+        var container = document.getElementById('editQuizQuestions');
+
+        if (!container) {
+          return;
+        }
+
+        var template = container.querySelector('.quiz-question-builder').cloneNode(true);
+        var rows = Array.isArray(questions) && questions.length ? questions : [{ text: '', choices: ['', '', '', ''], correct: 0 }];
+
+        container.innerHTML = '';
+        rows.forEach(function (question, index) {
+          container.appendChild(buildQuizQuestionBlock(template, index, question));
+        });
+        refreshQuizQuestionLabels(container);
+      };
+
+      bindQuizQuestionBuilder('quizQuestions', 'addQuizQuestion');
+      bindQuizQuestionBuilder('editQuizQuestions', 'addEditQuizQuestion');
+    })();
+  </script>
+  <script>
+    (function () {
+      var editQuizModal = document.getElementById('editQuizModal');
+
+      if (editQuizModal) {
+        editQuizModal.addEventListener('shown.bs.modal', function () {
+          var modalBody = editQuizModal.querySelector('.modal-body');
+
+          if (modalBody) {
+            modalBody.scrollTop = 0;
           }
         });
       }
     })();
   </script>
-  <script src="js/app.js"></script>
+  <script src="js/app.js?v=quiz-question-builder-fix"></script>
 </body>
 </html>

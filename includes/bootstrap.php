@@ -141,6 +141,7 @@ try {
         "CREATE TABLE IF NOT EXISTS class_tasks (
           id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
           class_id INT UNSIGNED NOT NULL,
+          folder_id INT UNSIGNED NULL,
           teacher_id INT UNSIGNED NULL,
           task_title VARCHAR(160) NOT NULL,
           description TEXT NULL,
@@ -149,6 +150,7 @@ try {
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
           updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
           INDEX idx_class_tasks_class_id (class_id),
+          INDEX idx_class_tasks_folder_id (folder_id),
           INDEX idx_class_tasks_teacher_id (teacher_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
     );
@@ -189,6 +191,21 @@ try {
         $pdo->exec('ALTER TABLE learner_grades ADD INDEX idx_grades_task_id (task_id)');
     }
 
+    $classTaskFolderColumn = $pdo->query(
+        "SELECT COLUMN_NAME
+         FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE()
+           AND TABLE_NAME = 'class_tasks'
+           AND COLUMN_NAME = 'folder_id'
+         LIMIT 1"
+    );
+
+    if (!$classTaskFolderColumn->fetchColumn()) {
+        // Grade items can optionally belong to the same class topics used by materials, quizzes, and assignments.
+        $pdo->exec('ALTER TABLE class_tasks ADD folder_id INT UNSIGNED NULL AFTER class_id');
+        $pdo->exec('ALTER TABLE class_tasks ADD INDEX idx_class_tasks_folder_id (folder_id)');
+    }
+
     // Learning materials can be uploaded per class by admins or the assigned teacher.
     $pdo->exec(
         "CREATE TABLE IF NOT EXISTS class_learning_materials (
@@ -209,11 +226,41 @@ try {
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
     );
 
+    // Topics organize materials, quizzes, and assignments without changing existing uploaded files.
+    $pdo->exec(
+        "CREATE TABLE IF NOT EXISTS class_material_folders (
+          id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+          class_id INT UNSIGNED NOT NULL,
+          name VARCHAR(140) NOT NULL,
+          description VARCHAR(255) NULL,
+          created_by_user_id INT UNSIGNED NULL,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          INDEX idx_material_folders_class_id (class_id),
+          INDEX idx_material_folders_name (name)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    );
+
+    $materialFolderColumn = $pdo->query(
+        "SELECT COLUMN_NAME
+         FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE()
+           AND TABLE_NAME = 'class_learning_materials'
+           AND COLUMN_NAME = 'folder_id'
+         LIMIT 1"
+    );
+
+    if (!$materialFolderColumn->fetchColumn()) {
+        $pdo->exec('ALTER TABLE class_learning_materials ADD folder_id INT UNSIGNED NULL AFTER class_id');
+        $pdo->exec('ALTER TABLE class_learning_materials ADD INDEX idx_materials_folder_id (folder_id)');
+    }
+
     // Timed multiple-choice quizzes compute learner scores automatically.
     $pdo->exec(
         "CREATE TABLE IF NOT EXISTS class_quizzes (
           id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
           class_id INT UNSIGNED NOT NULL,
+          folder_id INT UNSIGNED NULL,
           title VARCHAR(180) NOT NULL,
           description TEXT NULL,
           timer_minutes INT UNSIGNED NOT NULL DEFAULT 10,
@@ -222,9 +269,24 @@ try {
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
           updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
           INDEX idx_quizzes_class_id (class_id),
+          INDEX idx_quizzes_folder_id (folder_id),
           INDEX idx_quizzes_status (status)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
     );
+
+    $quizFolderColumn = $pdo->query(
+        "SELECT COLUMN_NAME
+         FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE()
+           AND TABLE_NAME = 'class_quizzes'
+           AND COLUMN_NAME = 'folder_id'
+         LIMIT 1"
+    );
+
+    if (!$quizFolderColumn->fetchColumn()) {
+        $pdo->exec('ALTER TABLE class_quizzes ADD folder_id INT UNSIGNED NULL AFTER class_id');
+        $pdo->exec('ALTER TABLE class_quizzes ADD INDEX idx_quizzes_folder_id (folder_id)');
+    }
 
     $pdo->exec(
         "CREATE TABLE IF NOT EXISTS quiz_questions (
@@ -284,6 +346,7 @@ try {
         "CREATE TABLE IF NOT EXISTS class_assignments (
           id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
           class_id INT UNSIGNED NOT NULL,
+          folder_id INT UNSIGNED NULL,
           title VARCHAR(180) NOT NULL,
           instructions TEXT NULL,
           due_date DATE NULL,
@@ -294,9 +357,24 @@ try {
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
           updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
           INDEX idx_assignments_class_id (class_id),
+          INDEX idx_assignments_folder_id (folder_id),
           INDEX idx_assignments_status (status)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
     );
+
+    $assignmentFolderColumn = $pdo->query(
+        "SELECT COLUMN_NAME
+         FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE()
+           AND TABLE_NAME = 'class_assignments'
+           AND COLUMN_NAME = 'folder_id'
+         LIMIT 1"
+    );
+
+    if (!$assignmentFolderColumn->fetchColumn()) {
+        $pdo->exec('ALTER TABLE class_assignments ADD folder_id INT UNSIGNED NULL AFTER class_id');
+        $pdo->exec('ALTER TABLE class_assignments ADD INDEX idx_assignments_folder_id (folder_id)');
+    }
 
     $pdo->exec(
         "CREATE TABLE IF NOT EXISTS assignment_submissions (

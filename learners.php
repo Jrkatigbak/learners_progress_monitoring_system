@@ -524,7 +524,7 @@ if ($errors) {
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=learner-card-clean" rel="stylesheet">
+  <link href="css/style.css?v=learner-card-photo-large" rel="stylesheet">
 </head>
 <body class="dashboard-page">
   <div class="app-layout">

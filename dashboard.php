@@ -10,9 +10,6 @@ $completedLearnerCount = (int) $pdo->query("SELECT COUNT(*) FROM learners WHERE 
 $averageProgress = (int) round((float) $pdo->query('SELECT COALESCE(AVG(progress_percent), 0) FROM learners')->fetchColumn());
 // Course enrollment count is shown as a first-class dashboard metric.
 $enrollmentCount = (int) $pdo->query('SELECT COUNT(*) FROM course_enrollments')->fetchColumn();
-// Grade counters keep the admin dashboard connected to the class task workflow.
-$taskCount = (int) $pdo->query('SELECT COUNT(*) FROM class_tasks')->fetchColumn();
-$gradeCount = (int) $pdo->query('SELECT COUNT(*) FROM learner_grades')->fetchColumn();
 ?>
 <!doctype html>
 <html lang="en">
@@ -45,7 +42,6 @@ $gradeCount = (int) $pdo->query('SELECT COUNT(*) FROM learner_grades')->fetchCol
         <a href="classes.php"><i class="fa-solid fa-chalkboard-user"></i> Classes</a>
         <a href="teachers.php"><i class="fa-solid fa-user-tie"></i> Teachers</a>
         <a href="learners.php"><i class="fa-solid fa-users"></i> Learners</a>
-        <a href="grades.php"><i class="fa-solid fa-star"></i> Grades</a>
       </nav>
       <div class="sidebar-footer">
         <p class="mb-1">Logged in as</p>
@@ -88,7 +84,6 @@ $gradeCount = (int) $pdo->query('SELECT COUNT(*) FROM learner_grades')->fetchCol
             <p>Monitor the most important learner activity, progress updates, and pending monitoring work from one dashboard.</p>
           </div>
           <div class="d-flex flex-wrap gap-2">
-            <a href="grades.php" class="btn btn-light"><i class="fa-solid fa-star me-2"></i>Manage Grades</a>
             <a href="logout.php" class="btn btn-outline-light"><i class="fa-solid fa-arrow-right-from-bracket me-2"></i>Logout</a>
           </div>
         </div>
@@ -124,14 +119,6 @@ $gradeCount = (int) $pdo->query('SELECT COUNT(*) FROM learner_grades')->fetchCol
               <p>Enrollments</p>
               <h3><?php echo $enrollmentCount; ?></h3>
               <small class="text-success"><i class="fa-solid fa-check"></i> Course assignments</small>
-            </div>
-          </div>
-          <div class="col-md-6 col-xl-3">
-            <div class="metric-card">
-              <span class="metric-icon bg-danger-subtle text-danger"><i class="fa-solid fa-star"></i></span>
-              <p>Grade Records</p>
-              <h3><?php echo $gradeCount; ?></h3>
-              <small class="text-secondary"><?php echo $taskCount; ?> class tasks</small>
             </div>
           </div>
         </div>
@@ -202,9 +189,6 @@ $gradeCount = (int) $pdo->query('SELECT COUNT(*) FROM learner_grades')->fetchCol
                   <p>Export learner progress summary by Friday.</p>
                 </div>
               </div>
-              <a href="grades.php" class="btn btn-sm btn-primary w-100 mt-3">
-                <i class="fa-solid fa-star me-2"></i>Input Learner Grades
-              </a>
             </div>
           </div>
         </div>
