@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS teachers (
 CREATE TABLE IF NOT EXISTS classes (
   id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   teacher_id INT UNSIGNED NULL,
+  sort_order INT UNSIGNED NOT NULL DEFAULT 0,
   class_name VARCHAR(160) NOT NULL,
   teacher VARCHAR(160) NOT NULL,
   banner_image VARCHAR(255) NULL,
@@ -45,6 +46,7 @@ CREATE TABLE IF NOT EXISTS classes (
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   UNIQUE KEY uniq_class_name (class_name),
   INDEX idx_classes_teacher_id (teacher_id),
+  INDEX idx_classes_sort_order (sort_order),
   INDEX idx_classes_status (status)
   ,
   CONSTRAINT fk_classes_teacher

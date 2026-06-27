@@ -84,6 +84,30 @@ try {
         $pdo->exec('ALTER TABLE classes ADD INDEX idx_classes_teacher_id (teacher_id)');
     }
 
+    $classSortColumn = $pdo->query(
+        "SELECT COLUMN_NAME
+         FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE()
+           AND TABLE_NAME = 'classes'
+           AND COLUMN_NAME = 'sort_order'
+         LIMIT 1"
+    );
+
+    if (!$classSortColumn->fetchColumn()) {
+        $pdo->exec('ALTER TABLE classes ADD sort_order INT UNSIGNED NOT NULL DEFAULT 0 AFTER teacher_id');
+        $pdo->exec('ALTER TABLE classes ADD INDEX idx_classes_sort_order (sort_order)');
+
+        // Preserve the old visible order as the initial manual order.
+        $classRows = $pdo->query('SELECT id FROM classes ORDER BY created_at DESC, id DESC')->fetchAll();
+        $classOrderStatement = $pdo->prepare('UPDATE classes SET sort_order = :sort_order WHERE id = :id');
+        foreach ($classRows as $index => $classRow) {
+            $classOrderStatement->execute([
+                'sort_order' => $index + 1,
+                'id' => (int) $classRow['id'],
+            ]);
+        }
+    }
+
     $existingTeachers = $pdo->query("SELECT DISTINCT teacher FROM classes WHERE teacher <> ''")->fetchAll();
     $teacherExistsStatement = $pdo->prepare('SELECT id FROM teachers WHERE full_name = :full_name LIMIT 1');
     $teacherSeedStatement = $pdo->prepare(

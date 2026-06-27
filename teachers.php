@@ -24,7 +24,8 @@ if (!is_dir($teacherUploadDirectory)) {
 }
 
 if (is_dir($teacherUploadDirectory)) {
-    chmod($teacherUploadDirectory, 0777);
+    // Some deployed hosts disallow chmod even when uploads already work, so keep page output warning-free.
+    @chmod($teacherUploadDirectory, 0777);
 }
 
 function deleteTeacherPhoto(string $photoPath): void
@@ -81,6 +82,12 @@ function sendTeacherCredentialEmail(SmtpMailer $mailer, string $email, string $n
     return $mailer->send($email, $name, $subject, $htmlBody, $textBody);
 }
 
+function generateTeacherPassword(): string
+{
+    // Reset credentials use a fresh generated password instead of the reusable default.
+    return 'Teacher-' . bin2hex(random_bytes(3)) . '-' . random_int(100, 999);
+}
+
 function syncTeacherLogin(PDO $pdo, string $name, string $email): ?string
 {
     if ($email === '') {
@@ -105,8 +112,55 @@ function syncTeacherLogin(PDO $pdo, string $name, string $email): ?string
     return $teacherPassword;
 }
 
+function resetTeacherLogin(PDO $pdo, string $name, string $email): string
+{
+    $teacherPassword = generateTeacherPassword();
+    $statement = $pdo->prepare(
+        "INSERT INTO users (name, email, password_hash, role)
+         VALUES (:name, :email, :password_hash, 'teacher')
+         ON DUPLICATE KEY UPDATE
+            name = VALUES(name),
+            password_hash = VALUES(password_hash)"
+    );
+    $statement->execute([
+        'name' => $name,
+        'email' => $email,
+        'password_hash' => password_hash($teacherPassword, PASSWORD_DEFAULT),
+    ]);
+
+    return $teacherPassword;
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
+
+    if ($action === 'reset_credentials') {
+        $teacherId = (int) ($_POST['id'] ?? 0);
+        $teacherStatement = $pdo->prepare('SELECT full_name, email FROM teachers WHERE id = :id LIMIT 1');
+        $teacherStatement->execute(['id' => $teacherId]);
+        $teacher = $teacherStatement->fetch() ?: null;
+
+        if (!$teacher) {
+            $errors[] = 'Select a valid teacher.';
+        }
+
+        $teacherEmail = trim((string) ($teacher['email'] ?? ''));
+        $teacherName = trim((string) ($teacher['full_name'] ?? ''));
+
+        if ($teacherEmail === '' || !filter_var($teacherEmail, FILTER_VALIDATE_EMAIL)) {
+            $errors[] = 'Teacher needs a valid email before credentials can be resent.';
+        }
+
+        if (!$errors) {
+            // Reset the teacher portal password before sending the new credentials.
+            $teacherPassword = resetTeacherLogin($pdo, $teacherName, $teacherEmail);
+            $mailer = new SmtpMailer($mailerConfig);
+            $emailStatus = sendTeacherCredentialEmail($mailer, $teacherEmail, $teacherName, $teacherPassword, appLoginUrl()) ? 'sent' : 'failed';
+
+            header('Location: teachers.php?success=credentials_reset&email=' . $emailStatus);
+            exit;
+        }
+    }
 
     if ($action === 'delete') {
         $teacherId = (int) ($_POST['id'] ?? 0);
@@ -331,6 +385,7 @@ $successMessages = [
     'updated' => 'Teacher updated successfully.',
     'deleted' => 'Teacher deleted successfully.',
     'in_use' => 'Teacher is assigned to a class. Deactivate or reassign classes before deleting.',
+    'credentials_reset' => 'Teacher credentials were reset.',
 ];
 $emailStatus = $_GET['email'] ?? '';
 ?>
@@ -347,7 +402,7 @@ $emailStatus = $_GET['email'] ?? '';
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css" rel="stylesheet">
+  <link href="css/style.css?v=teacher-credential-reset" rel="stylesheet">
 </head>
 <body class="dashboard-page">
   <div class="app-layout">
@@ -482,6 +537,13 @@ $emailStatus = $_GET['email'] ?? '';
                     <span><?php echo (int) $teacher['class_count'] === 1 ? 'Assigned class' : 'Assigned classes'; ?></span>
                   </div>
                   <div class="learner-icon-actions">
+                    <form method="post" onsubmit="return confirm('Reset password and email new login credentials to this teacher?');">
+                      <input type="hidden" name="action" value="reset_credentials">
+                      <input type="hidden" name="id" value="<?php echo (int) $teacher['id']; ?>">
+                      <button type="submit" class="learner-icon-button teacher-reset-button" aria-label="Reset and resend teacher credentials" title="Reset and resend credentials">
+                        <i class="fa-solid fa-key"></i>
+                      </button>
+                    </form>
                     <a class="learner-icon-button" href="teachers.php?edit=<?php echo (int) $teacher['id']; ?>" aria-label="Edit teacher">
                       <i class="fa-solid fa-pen"></i>
                     </a>

@@ -21,7 +21,8 @@ if (!is_dir($classUploadDirectory)) {
 }
 
 if (is_dir($classUploadDirectory)) {
-    chmod($classUploadDirectory, 0777);
+    // Hosted environments can reject chmod even when uploads work, so keep page output warning-free.
+    @chmod($classUploadDirectory, 0777);
 }
 
 function deleteClassBanner(string $bannerPath): void
@@ -34,6 +35,20 @@ function deleteClassBanner(string $bannerPath): void
 
     if (is_file($fullPath)) {
         unlink($fullPath);
+    }
+}
+
+function normalizeClassSortOrder(PDO $pdo): void
+{
+    // Keep class ordering compact so up/down swaps stay predictable after deletes or old rows.
+    $classRows = $pdo->query('SELECT id FROM classes ORDER BY sort_order ASC, created_at DESC, id DESC')->fetchAll();
+    $orderStatement = $pdo->prepare('UPDATE classes SET sort_order = :sort_order WHERE id = :id');
+
+    foreach ($classRows as $index => $classRow) {
+        $orderStatement->execute([
+            'sort_order' => $index + 1,
+            'id' => (int) $classRow['id'],
+        ]);
     }
 }
 
@@ -55,8 +70,52 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $deleteStatement = $pdo->prepare('DELETE FROM classes WHERE id = :id');
         $deleteStatement->execute(['id' => (int) ($_POST['id'] ?? 0)]);
         deleteClassBanner($bannerToDelete);
+        normalizeClassSortOrder($pdo);
 
         header('Location: classes.php?success=deleted');
+        exit;
+    }
+
+    if ($action === 'move_class') {
+        normalizeClassSortOrder($pdo);
+
+        $classId = (int) ($_POST['id'] ?? 0);
+        $direction = $_POST['direction'] ?? '';
+        $classStatement = $pdo->prepare('SELECT id, sort_order FROM classes WHERE id = :id LIMIT 1');
+        $classStatement->execute(['id' => $classId]);
+        $classToMove = $classStatement->fetch() ?: null;
+
+        if ($classToMove && in_array($direction, ['up', 'down'], true)) {
+            // Swap with the nearest class in the requested direction for a predictable manual order.
+            $neighborSql = $direction === 'up'
+                ? 'SELECT id, sort_order FROM classes WHERE sort_order < :sort_order ORDER BY sort_order DESC, id DESC LIMIT 1'
+                : 'SELECT id, sort_order FROM classes WHERE sort_order > :sort_order ORDER BY sort_order ASC, id ASC LIMIT 1';
+            $neighborStatement = $pdo->prepare($neighborSql);
+            $neighborStatement->execute(['sort_order' => (int) $classToMove['sort_order']]);
+            $neighbor = $neighborStatement->fetch() ?: null;
+
+            if ($neighbor) {
+                $swapStatement = $pdo->prepare(
+                    'UPDATE classes
+                     SET sort_order = CASE
+                        WHEN id = :class_id THEN :neighbor_order
+                        WHEN id = :neighbor_id THEN :class_order
+                        ELSE sort_order
+                     END
+                     WHERE id IN (:class_id_filter, :neighbor_id_filter)'
+                );
+                $swapStatement->execute([
+                    'class_id' => (int) $classToMove['id'],
+                    'neighbor_order' => (int) $neighbor['sort_order'],
+                    'neighbor_id' => (int) $neighbor['id'],
+                    'class_order' => (int) $classToMove['sort_order'],
+                    'class_id_filter' => (int) $classToMove['id'],
+                    'neighbor_id_filter' => (int) $neighbor['id'],
+                ]);
+            }
+        }
+
+        header('Location: classes.php?success=reordered');
         exit;
     }
 
@@ -153,9 +212,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         // Create a new class record from the Add Class form.
+        $nextSortOrder = (int) $pdo->query('SELECT COALESCE(MAX(sort_order), 0) + 1 FROM classes')->fetchColumn();
         $statement = $pdo->prepare(
-            'INSERT INTO classes (class_name, teacher_id, teacher, banner_image, status, description)
-             VALUES (:class_name, :teacher_id, :teacher, :banner_image, :status, :description)'
+            'INSERT INTO classes (class_name, teacher_id, teacher, banner_image, status, description, sort_order)
+             VALUES (:class_name, :teacher_id, :teacher, :banner_image, :status, :description, :sort_order)'
         );
         $statement->execute([
             'class_name' => $className,
@@ -164,6 +224,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'banner_image' => $bannerImage !== '' ? $bannerImage : null,
             'status' => $status,
             'description' => $description !== '' ? $description : null,
+            'sort_order' => $nextSortOrder,
         ]);
 
         header('Location: classes.php?success=created');
@@ -181,6 +242,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     ];
 }
 
+normalizeClassSortOrder($pdo);
+
 if ($search !== '') {
     // Search keeps the class list focused without changing the add/edit modal state.
     $classesStatement = $pdo->prepare(
@@ -193,7 +256,7 @@ if ($search !== '') {
             OR teachers.full_name LIKE :teacher_master_search
             OR classes.status LIKE :status_search
             OR classes.description LIKE :description_search
-         ORDER BY classes.created_at DESC, classes.id DESC"
+         ORDER BY classes.sort_order ASC, classes.created_at DESC, classes.id DESC"
     );
     $searchTerm = '%' . $search . '%';
     $classesStatement->execute([
@@ -209,7 +272,7 @@ if ($search !== '') {
                 COALESCE(teachers.full_name, classes.teacher) AS display_teacher
          FROM classes
          LEFT JOIN teachers ON teachers.id = classes.teacher_id
-         ORDER BY classes.created_at DESC, classes.id DESC'
+         ORDER BY classes.sort_order ASC, classes.created_at DESC, classes.id DESC'
     );
 }
 $classRows = $classesStatement->fetchAll();
@@ -243,6 +306,7 @@ $successMessages = [
     'created' => 'Class added successfully.',
     'updated' => 'Class updated successfully.',
     'deleted' => 'Class deleted successfully.',
+    'reordered' => 'Class order updated successfully.',
 ];
 ?>
 <!doctype html>
@@ -258,7 +322,7 @@ $successMessages = [
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css" rel="stylesheet">
+  <link href="css/style.css?v=class-reorder-controls" rel="stylesheet">
 </head>
 <body class="dashboard-page">
   <div class="app-layout">
@@ -353,7 +417,7 @@ $successMessages = [
             </div>
           <?php else: ?>
             <div class="class-card-grid">
-              <?php foreach ($classRows as $classRow): ?>
+              <?php foreach ($classRows as $classIndex => $classRow): ?>
                 <article class="class-card">
                   <a class="class-card-open-link" href="class_workspace.php?class_id=<?php echo (int) $classRow['id']; ?>&tool=dashboard" aria-label="Open <?php echo e($classRow['class_name']); ?>">
                     <div class="class-wallpaper">
@@ -377,6 +441,26 @@ $successMessages = [
                     </div>
                   </a>
                   <footer class="class-card-footer">
+                    <?php if ($search === ''): ?>
+                      <div class="class-order-actions" aria-label="Reorder <?php echo e($classRow['class_name']); ?>">
+                        <form method="post">
+                          <input type="hidden" name="action" value="move_class">
+                          <input type="hidden" name="id" value="<?php echo (int) $classRow['id']; ?>">
+                          <input type="hidden" name="direction" value="up">
+                          <button type="submit" class="learner-icon-button" aria-label="Move class up" <?php echo $classIndex === 0 ? 'disabled' : ''; ?>>
+                            <i class="fa-solid fa-arrow-up"></i>
+                          </button>
+                        </form>
+                        <form method="post">
+                          <input type="hidden" name="action" value="move_class">
+                          <input type="hidden" name="id" value="<?php echo (int) $classRow['id']; ?>">
+                          <input type="hidden" name="direction" value="down">
+                          <button type="submit" class="learner-icon-button" aria-label="Move class down" <?php echo $classIndex === count($classRows) - 1 ? 'disabled' : ''; ?>>
+                            <i class="fa-solid fa-arrow-down"></i>
+                          </button>
+                        </form>
+                      </div>
+                    <?php endif; ?>
                     <a class="btn btn-sm btn-primary" href="class_workspace.php?class_id=<?php echo (int) $classRow['id']; ?>&tool=dashboard">
                       <i class="fa-solid fa-folder-open me-2"></i>Open Class
                     </a>
