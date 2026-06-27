@@ -203,10 +203,13 @@ CREATE TABLE IF NOT EXISTS class_material_folders (
   class_id INT UNSIGNED NOT NULL,
   name VARCHAR(140) NOT NULL,
   description VARCHAR(255) NULL,
+  banner_image VARCHAR(255) NULL,
+  sort_order INT UNSIGNED NOT NULL DEFAULT 0,
   created_by_user_id INT UNSIGNED NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   INDEX idx_material_folders_class_id (class_id),
+  INDEX idx_material_folders_sort_order (class_id, sort_order),
   INDEX idx_material_folders_name (name),
   CONSTRAINT fk_material_folders_class
     FOREIGN KEY (class_id) REFERENCES classes(id)

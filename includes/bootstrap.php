@@ -257,13 +257,69 @@ try {
           class_id INT UNSIGNED NOT NULL,
           name VARCHAR(140) NOT NULL,
           description VARCHAR(255) NULL,
+          banner_image VARCHAR(255) NULL,
+          sort_order INT UNSIGNED NOT NULL DEFAULT 0,
           created_by_user_id INT UNSIGNED NULL,
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
           updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
           INDEX idx_material_folders_class_id (class_id),
+          INDEX idx_material_folders_sort_order (class_id, sort_order),
           INDEX idx_material_folders_name (name)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
     );
+
+    $topicBannerColumn = $pdo->query(
+        "SELECT COLUMN_NAME
+         FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE()
+           AND TABLE_NAME = 'class_material_folders'
+           AND COLUMN_NAME = 'banner_image'
+         LIMIT 1"
+    );
+
+    if (!$topicBannerColumn->fetchColumn()) {
+        $pdo->exec('ALTER TABLE class_material_folders ADD banner_image VARCHAR(255) NULL AFTER description');
+    }
+
+    $topicSortColumn = $pdo->query(
+        "SELECT COLUMN_NAME
+         FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE()
+           AND TABLE_NAME = 'class_material_folders'
+           AND COLUMN_NAME = 'sort_order'
+         LIMIT 1"
+    );
+
+    if (!$topicSortColumn->fetchColumn()) {
+        $pdo->exec('ALTER TABLE class_material_folders ADD sort_order INT UNSIGNED NOT NULL DEFAULT 0 AFTER banner_image');
+        $pdo->exec('ALTER TABLE class_material_folders ADD INDEX idx_material_folders_sort_order (class_id, sort_order)');
+
+        // Preserve the old visible topic order as the initial manual order per class.
+        $topicRows = $pdo->query('SELECT id, class_id FROM class_material_folders ORDER BY class_id ASC, created_at DESC, id DESC')->fetchAll();
+        $topicOrderByClass = [];
+        $topicOrderStatement = $pdo->prepare('UPDATE class_material_folders SET sort_order = :sort_order WHERE id = :id');
+        foreach ($topicRows as $topicRow) {
+            $topicClassId = (int) $topicRow['class_id'];
+            $topicOrderByClass[$topicClassId] = ($topicOrderByClass[$topicClassId] ?? 0) + 1;
+            $topicOrderStatement->execute([
+                'sort_order' => $topicOrderByClass[$topicClassId],
+                'id' => (int) $topicRow['id'],
+            ]);
+        }
+    }
+
+    $topicSortIndex = $pdo->query(
+        "SELECT INDEX_NAME
+         FROM INFORMATION_SCHEMA.STATISTICS
+         WHERE TABLE_SCHEMA = DATABASE()
+           AND TABLE_NAME = 'class_material_folders'
+           AND INDEX_NAME = 'idx_material_folders_sort_order'
+         LIMIT 1"
+    );
+
+    if (!$topicSortIndex->fetchColumn()) {
+        $pdo->exec('ALTER TABLE class_material_folders ADD INDEX idx_material_folders_sort_order (class_id, sort_order)');
+    }
 
     $materialFolderColumn = $pdo->query(
         "SELECT COLUMN_NAME

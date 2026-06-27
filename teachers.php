@@ -537,7 +537,7 @@ $emailStatus = $_GET['email'] ?? '';
                     <span><?php echo (int) $teacher['class_count'] === 1 ? 'Assigned class' : 'Assigned classes'; ?></span>
                   </div>
                   <div class="learner-icon-actions">
-                    <form method="post" onsubmit="return confirm('Reset password and email new login credentials to this teacher?');">
+                    <form method="post" class="credential-reset-form" data-confirm-message="Reset password and email new login credentials to this teacher?">
                       <input type="hidden" name="action" value="reset_credentials">
                       <input type="hidden" name="id" value="<?php echo (int) $teacher['id']; ?>">
                       <button type="submit" class="learner-icon-button teacher-reset-button" aria-label="Reset and resend teacher credentials" title="Reset and resend credentials">
@@ -652,6 +652,18 @@ $emailStatus = $_GET['email'] ?? '';
 
   <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+  <?php if ($success === 'credentials_reset' && in_array($emailStatus, ['sent', 'failed'], true)): ?>
+    <script>
+      window.credentialResetNotice = {
+        icon: '<?php echo $emailStatus === 'sent' ? 'success' : 'error'; ?>',
+        title: '<?php echo $emailStatus === 'sent' ? 'Credentials sent' : 'Email not sent'; ?>',
+        text: '<?php echo $emailStatus === 'sent'
+            ? 'The teacher password was reset and the new login credentials were sent by email.'
+            : 'The teacher password was reset, but the credential email could not be sent.'; ?>'
+      };
+    </script>
+  <?php endif; ?>
   <?php if ($errors || (int) $formTeacher['id'] > 0): ?>
     <script>
       window.addEventListener('DOMContentLoaded', function () {
@@ -659,6 +671,6 @@ $emailStatus = $_GET['email'] ?? '';
       });
     </script>
   <?php endif; ?>
-  <script src="js/app.js"></script>
+  <script src="js/app.js?v=credential-reset-notice"></script>
 </body>
 </html>

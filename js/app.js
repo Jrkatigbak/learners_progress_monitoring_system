@@ -21,6 +21,20 @@ $(function () {
     setTheme(current === 'dark' ? 'light' : 'dark');
   });
 
+  if (window.credentialResetNotice) {
+    // Show a clear sent/not-sent notification after the reset request redirects back.
+    if (window.Swal) {
+      Swal.fire({
+        icon: window.credentialResetNotice.icon,
+        title: window.credentialResetNotice.title,
+        text: window.credentialResetNotice.text,
+        confirmButtonColor: '#f58220'
+      });
+    } else {
+      window.alert(window.credentialResetNotice.title + '\n\n' + window.credentialResetNotice.text);
+    }
+  }
+
   $('#loginForm').on('submit', function () {
     var $button = $('#loginButton');
     $button.prop('disabled', true);
@@ -119,6 +133,25 @@ $(function () {
 
   $('#topicSearchInput').on('input', updateTopicSearch);
   updateTopicSearch();
+
+  $(document).on('submit', '.credential-reset-form', function (event) {
+    var $form = $(this);
+    var message = $form.attr('data-confirm-message') || 'Reset and resend login credentials?';
+
+    if (!window.confirm(message)) {
+      event.preventDefault();
+      return;
+    }
+
+    var $button = $form.find('button[type="submit"]').first();
+
+    // Resetting credentials sends email through SMTP, so show progress until the page redirects.
+    $button
+      .prop('disabled', true)
+      .addClass('is-loading')
+      .attr('aria-label', 'Sending credentials')
+      .html('<span class="spinner-border spinner-border-sm" aria-hidden="true"></span><span class="visually-hidden">Sending credentials</span>');
+  });
 
   var materialLinkIndex = 1;
   var selectedMaterialFiles = [];
@@ -280,6 +313,8 @@ $(function () {
     $('#edit_topic_name').val($button.attr('data-name') || '');
     $('#edit_topic_description').val($button.attr('data-description') || '');
     $('#edit_topic_return_tool').val($button.attr('data-return-tool') || 'materials');
+    $('#edit_topic_existing_banner').val($button.attr('data-banner-image') || '');
+    $('#edit_topic_banner_image').val('');
   });
 
   $(document).on('click', '.edit-quiz-button', function () {

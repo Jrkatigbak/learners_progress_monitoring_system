@@ -68,6 +68,19 @@ function deleteAssignmentFile(string $filePath): void
     }
 }
 
+function deleteTopicBanner(string $bannerPath): void
+{
+    if ($bannerPath === '' || strpos($bannerPath, 'uploads/topics/') !== 0) {
+        return;
+    }
+
+    $fullPath = __DIR__ . '/' . $bannerPath;
+
+    if (is_file($fullPath)) {
+        unlink($fullPath);
+    }
+}
+
 function generateLearnerPassword(): string
 {
     // Reset passwords stay temporary-looking and hard to guess before the learner changes them.
@@ -145,6 +158,22 @@ function classTopicExists(PDO $pdo, int $classId, int $topicId): bool
     ]);
 
     return (bool) $topicStatement->fetch();
+}
+
+function normalizeTopicSortOrder(PDO $pdo, int $classId): void
+{
+    // Keep topic ordering compact per class so the up/down controls swap the nearest neighbor.
+    $topicRowsStatement = $pdo->prepare('SELECT id FROM class_material_folders WHERE class_id = :class_id ORDER BY sort_order ASC, created_at DESC, id DESC');
+    $topicRowsStatement->execute(['class_id' => $classId]);
+    $orderStatement = $pdo->prepare('UPDATE class_material_folders SET sort_order = :sort_order WHERE id = :id AND class_id = :class_id');
+
+    foreach ($topicRowsStatement->fetchAll() as $index => $topicRow) {
+        $orderStatement->execute([
+            'sort_order' => $index + 1,
+            'id' => (int) $topicRow['id'],
+            'class_id' => $classId,
+        ]);
+    }
 }
 
 function prepareQuizQuestions(array $questions, array &$errors): array
@@ -240,6 +269,8 @@ $materialUploadDirectory = __DIR__ . '/uploads/materials';
 $materialUploadPathPrefix = 'uploads/materials/';
 $assignmentUploadDirectory = __DIR__ . '/uploads/assignments';
 $assignmentUploadPathPrefix = 'uploads/assignments/';
+$topicUploadDirectory = __DIR__ . '/uploads/topics';
+$topicUploadPathPrefix = 'uploads/topics/';
 
 if (!$isAdmin && !$isTeacher) {
     header('Location: ' . $auth->redirectPath());
@@ -262,6 +293,15 @@ if (!is_dir($assignmentUploadDirectory)) {
 
 if (is_dir($assignmentUploadDirectory)) {
     chmod($assignmentUploadDirectory, 0777);
+}
+
+if (!is_dir($topicUploadDirectory)) {
+    // Topic wallpapers live in their own folder so deleting a topic banner never touches class banners.
+    mkdir($topicUploadDirectory, 0777, true);
+}
+
+if (is_dir($topicUploadDirectory)) {
+    @chmod($topicUploadDirectory, 0777);
 }
 
 $classStatement = $pdo->prepare(
@@ -572,21 +612,59 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $folderDescription = trim($_POST['folder_description'] ?? '');
         $returnTool = $_POST['return_tool'] ?? 'materials';
         $returnTool = in_array($returnTool, ['materials', 'quizzes', 'assignments', 'tasks'], true) ? $returnTool : 'materials';
+        $bannerImage = null;
 
         if ($folderName === '') {
             $errors[] = 'Topic name is required.';
         }
 
+        if (isset($_FILES['topic_banner_image']) && $_FILES['topic_banner_image']['error'] !== UPLOAD_ERR_NO_FILE) {
+            if ($_FILES['topic_banner_image']['error'] !== UPLOAD_ERR_OK) {
+                $errors[] = 'Topic wallpaper could not be uploaded.';
+            } elseif (!is_writable($topicUploadDirectory)) {
+                $errors[] = 'Topic wallpaper upload folder is not writable.';
+            } else {
+                $allowedTopicImageTypes = [
+                    'image/jpeg' => 'jpg',
+                    'image/png' => 'png',
+                    'image/webp' => 'webp',
+                ];
+                $mimeType = mime_content_type($_FILES['topic_banner_image']['tmp_name']);
+
+                if (!isset($allowedTopicImageTypes[$mimeType])) {
+                    $errors[] = 'Topic wallpaper must be JPG, PNG, or WEBP.';
+                } elseif ($_FILES['topic_banner_image']['size'] > 4 * 1024 * 1024) {
+                    $errors[] = 'Topic wallpaper must be 4MB or smaller.';
+                } else {
+                    // Store topic wallpapers with generated names to avoid overwriting another topic image.
+                    $filename = 'topic-' . date('YmdHis') . '-' . bin2hex(random_bytes(4)) . '.' . $allowedTopicImageTypes[$mimeType];
+                    $targetPath = $topicUploadDirectory . '/' . $filename;
+
+                    if (move_uploaded_file($_FILES['topic_banner_image']['tmp_name'], $targetPath)) {
+                        $bannerImage = $topicUploadPathPrefix . $filename;
+                    } else {
+                        $errors[] = 'Topic wallpaper could not be saved.';
+                    }
+                }
+            }
+        }
+
         if (!$errors) {
+            $nextSortOrderStatement = $pdo->prepare('SELECT COALESCE(MAX(sort_order), 0) + 1 FROM class_material_folders WHERE class_id = :class_id');
+            $nextSortOrderStatement->execute(['class_id' => $classId]);
+            $nextSortOrder = (int) $nextSortOrderStatement->fetchColumn();
+
             // Topics are scoped per class so the same topic names can exist in different classes.
             $folderStatement = $pdo->prepare(
-                'INSERT INTO class_material_folders (class_id, name, description, created_by_user_id)
-                 VALUES (:class_id, :name, :description, :created_by_user_id)'
+                'INSERT INTO class_material_folders (class_id, name, description, banner_image, sort_order, created_by_user_id)
+                 VALUES (:class_id, :name, :description, :banner_image, :sort_order, :created_by_user_id)'
             );
             $folderStatement->execute([
                 'class_id' => $classId,
                 'name' => $folderName,
                 'description' => $folderDescription !== '' ? $folderDescription : null,
+                'banner_image' => $bannerImage,
+                'sort_order' => $nextSortOrder,
                 'created_by_user_id' => (int) $currentUser['id'],
             ]);
 
@@ -603,25 +681,68 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $folderDescription = trim($_POST['folder_description'] ?? '');
         $returnTool = $_POST['return_tool'] ?? 'materials';
         $returnTool = in_array($returnTool, ['materials', 'quizzes', 'assignments', 'tasks'], true) ? $returnTool : 'materials';
+        $existingBanner = '';
+        $bannerImage = null;
 
         if (!classTopicExists($pdo, $classId, $folderId)) {
             $errors[] = 'Select a valid topic.';
+        } else {
+            $existingBannerStatement = $pdo->prepare('SELECT banner_image FROM class_material_folders WHERE id = :id AND class_id = :class_id LIMIT 1');
+            $existingBannerStatement->execute([
+                'id' => $folderId,
+                'class_id' => $classId,
+            ]);
+            $existingBanner = (string) ($existingBannerStatement->fetchColumn() ?: '');
+            $bannerImage = $existingBanner !== '' ? $existingBanner : null;
         }
 
         if ($folderName === '') {
             $errors[] = 'Topic name is required.';
         }
 
+        if (isset($_FILES['topic_banner_image']) && $_FILES['topic_banner_image']['error'] !== UPLOAD_ERR_NO_FILE) {
+            if ($_FILES['topic_banner_image']['error'] !== UPLOAD_ERR_OK) {
+                $errors[] = 'Topic wallpaper could not be uploaded.';
+            } elseif (!is_writable($topicUploadDirectory)) {
+                $errors[] = 'Topic wallpaper upload folder is not writable.';
+            } else {
+                $allowedTopicImageTypes = [
+                    'image/jpeg' => 'jpg',
+                    'image/png' => 'png',
+                    'image/webp' => 'webp',
+                ];
+                $mimeType = mime_content_type($_FILES['topic_banner_image']['tmp_name']);
+
+                if (!isset($allowedTopicImageTypes[$mimeType])) {
+                    $errors[] = 'Topic wallpaper must be JPG, PNG, or WEBP.';
+                } elseif ($_FILES['topic_banner_image']['size'] > 4 * 1024 * 1024) {
+                    $errors[] = 'Topic wallpaper must be 4MB or smaller.';
+                } else {
+                    // Replacing a topic wallpaper removes the previous saved file after the new file lands.
+                    $filename = 'topic-' . date('YmdHis') . '-' . bin2hex(random_bytes(4)) . '.' . $allowedTopicImageTypes[$mimeType];
+                    $targetPath = $topicUploadDirectory . '/' . $filename;
+
+                    if (move_uploaded_file($_FILES['topic_banner_image']['tmp_name'], $targetPath)) {
+                        $bannerImage = $topicUploadPathPrefix . $filename;
+                        deleteTopicBanner($existingBanner);
+                    } else {
+                        $errors[] = 'Topic wallpaper could not be saved.';
+                    }
+                }
+            }
+        }
+
         if (!$errors) {
             // Rename only topics that belong to the current class workspace.
             $folderStatement = $pdo->prepare(
                 'UPDATE class_material_folders
-                 SET name = :name, description = :description
+                 SET name = :name, description = :description, banner_image = :banner_image
                  WHERE id = :id AND class_id = :class_id'
             );
             $folderStatement->execute([
                 'name' => $folderName,
                 'description' => $folderDescription !== '' ? $folderDescription : null,
+                'banner_image' => $bannerImage,
                 'id' => $folderId,
                 'class_id' => $classId,
             ]);
@@ -638,6 +759,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $folderId = (int) ($_POST['folder_id'] ?? 0);
         $returnTool = $_POST['return_tool'] ?? 'tasks';
         $returnTool = in_array($returnTool, ['materials', 'quizzes', 'assignments', 'tasks'], true) ? $returnTool : 'tasks';
+        $bannerToDelete = '';
 
         if (!classTopicExists($pdo, $classId, $folderId) || $folderId <= 0) {
             $errors[] = 'Select a valid topic.';
@@ -647,6 +769,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // Deleting a topic only unassigns content so materials, quizzes, assignments, and grades stay intact.
             try {
                 $pdo->beginTransaction();
+                $bannerStatement = $pdo->prepare('SELECT banner_image FROM class_material_folders WHERE id = :id AND class_id = :class_id LIMIT 1');
+                $bannerStatement->execute([
+                    'id' => $folderId,
+                    'class_id' => $classId,
+                ]);
+                $bannerToDelete = (string) ($bannerStatement->fetchColumn() ?: '');
                 $unassignStatements = [
                     'UPDATE class_learning_materials SET folder_id = NULL WHERE folder_id = :folder_id AND class_id = :class_id',
                     'UPDATE class_quizzes SET folder_id = NULL WHERE folder_id = :folder_id AND class_id = :class_id',
@@ -668,6 +796,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'class_id' => $classId,
                 ]);
                 $pdo->commit();
+                deleteTopicBanner($bannerToDelete);
+                normalizeTopicSortOrder($pdo, $classId);
             } catch (Throwable $exception) {
                 if ($pdo->inTransaction()) {
                     $pdo->rollBack();
@@ -683,6 +813,57 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         $tool = $returnTool;
+    }
+
+    if ($action === 'move_material_folder') {
+        $folderId = (int) ($_POST['folder_id'] ?? 0);
+        $direction = $_POST['direction'] ?? '';
+
+        normalizeTopicSortOrder($pdo, $classId);
+
+        $folderStatement = $pdo->prepare('SELECT id, sort_order FROM class_material_folders WHERE id = :id AND class_id = :class_id LIMIT 1');
+        $folderStatement->execute([
+            'id' => $folderId,
+            'class_id' => $classId,
+        ]);
+        $folderToMove = $folderStatement->fetch() ?: null;
+
+        if ($folderToMove && in_array($direction, ['up', 'down'], true)) {
+            // Swap with the nearest topic in the requested direction for a simple manual order.
+            $neighborSql = $direction === 'up'
+                ? 'SELECT id, sort_order FROM class_material_folders WHERE class_id = :class_id AND sort_order < :sort_order ORDER BY sort_order DESC, id DESC LIMIT 1'
+                : 'SELECT id, sort_order FROM class_material_folders WHERE class_id = :class_id AND sort_order > :sort_order ORDER BY sort_order ASC, id ASC LIMIT 1';
+            $neighborStatement = $pdo->prepare($neighborSql);
+            $neighborStatement->execute([
+                'class_id' => $classId,
+                'sort_order' => (int) $folderToMove['sort_order'],
+            ]);
+            $neighbor = $neighborStatement->fetch() ?: null;
+
+            if ($neighbor) {
+                $swapStatement = $pdo->prepare(
+                    'UPDATE class_material_folders
+                     SET sort_order = CASE
+                        WHEN id = :folder_id THEN :neighbor_order
+                        WHEN id = :neighbor_id THEN :folder_order
+                        ELSE sort_order
+                     END
+                     WHERE class_id = :class_id AND id IN (:folder_id_filter, :neighbor_id_filter)'
+                );
+                $swapStatement->execute([
+                    'folder_id' => (int) $folderToMove['id'],
+                    'neighbor_order' => (int) $neighbor['sort_order'],
+                    'neighbor_id' => (int) $neighbor['id'],
+                    'folder_order' => (int) $folderToMove['sort_order'],
+                    'class_id' => $classId,
+                    'folder_id_filter' => (int) $folderToMove['id'],
+                    'neighbor_id_filter' => (int) $neighbor['id'],
+                ]);
+            }
+        }
+
+        header('Location: class_workspace.php?class_id=' . $classId . '&tool=tasks&success=topic_reordered');
+        exit;
     }
 
     if ($action === 'move_material_topic') {
@@ -1337,6 +1518,8 @@ $tasksStatement = $pdo->prepare(
 $tasksStatement->execute(['class_id' => $classId]);
 $tasks = $tasksStatement->fetchAll();
 
+normalizeTopicSortOrder($pdo, $classId);
+
 $materialFoldersStatement = $pdo->prepare(
     'SELECT class_material_folders.*,
             (
@@ -1361,7 +1544,7 @@ $materialFoldersStatement = $pdo->prepare(
             ) AS grade_item_count
      FROM class_material_folders
      WHERE class_material_folders.class_id = :class_id
-     ORDER BY class_material_folders.created_at DESC, class_material_folders.id DESC'
+     ORDER BY class_material_folders.sort_order ASC, class_material_folders.created_at DESC, class_material_folders.id DESC'
 );
 $materialFoldersStatement->execute(['class_id' => $classId]);
 $materialFolders = $materialFoldersStatement->fetchAll();
@@ -1530,6 +1713,7 @@ $successMessages = [
     'topic_created' => 'Topic added successfully.',
     'topic_updated' => 'Topic updated successfully.',
     'topic_deleted' => 'Topic deleted successfully.',
+    'topic_reordered' => 'Topic order updated successfully.',
     'folder_created' => 'Topic added successfully.',
     'material_created' => 'Learning material added successfully.',
     'material_updated' => 'Learning material updated successfully.',
@@ -1558,7 +1742,7 @@ $credentialEmailStatus = $_GET['credential_email'] ?? '';
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=learner-credential-reset" rel="stylesheet">
+  <link href="css/style.css?v=topic-cards-wallpaper" rel="stylesheet">
 </head>
 <body class="dashboard-page class-workspace-page class-workspace-<?php echo e($tool); ?>">
   <div class="app-layout">
@@ -1748,7 +1932,7 @@ $credentialEmailStatus = $_GET['credential_email'] ?? '';
                     <div class="learner-card-body">
                       <span class="learner-status-pill <?php echo $learner['status'] === 'Completed' ? 'is-completed' : ($learner['status'] === 'On Hold' ? 'is-hold' : 'is-active'); ?>"><?php echo e($learner['status']); ?></span>
                       <?php if ($isAdmin): ?>
-                        <form method="post" class="learner-card-reset-form" onsubmit="return confirm('Reset password and email new login credentials to this learner?');">
+                        <form method="post" class="learner-card-reset-form credential-reset-form" data-confirm-message="Reset password and email new login credentials to this learner?">
                           <input type="hidden" name="action" value="reset_learner_credentials">
                           <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
                           <input type="hidden" name="tool" value="learners">
@@ -2119,19 +2303,47 @@ $credentialEmailStatus = $_GET['credential_email'] ?? '';
                 <input type="search" class="form-control" id="topicSearchInput" placeholder="Search topics">
               </div>
               <div class="material-folder-grid mb-5">
-                <?php foreach ($materialFolders as $folder): ?>
-                  <?php $topicTotalCount = (int) $folder['material_count'] + (int) $folder['quiz_count'] + (int) $folder['assignment_count'] + (int) ($folder['grade_item_count'] ?? 0); ?>
+                <?php foreach ($materialFolders as $topicIndex => $folder): ?>
                   <?php $topicSearchText = strtolower(trim($folder['name'] . ' ' . ($folder['description'] ?? ''))); ?>
-                  <article class="material-folder-card topic-search-card" data-topic-search="<?php echo e($topicSearchText); ?>">
-                    <a class="material-folder-link" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=materials&topic_id=<?php echo (int) $folder['id']; ?>">
-                      <span class="material-folder-icon"><i class="fa-solid fa-folder"></i></span>
-                      <span>
-                        <strong><?php echo e($folder['name']); ?></strong>
-                        <small><?php echo $topicTotalCount; ?> items</small>
-                      </span>
+                  <article class="topic-library-card topic-search-card" data-topic-search="<?php echo e($topicSearchText); ?>">
+                    <a class="topic-library-link" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=materials&topic_id=<?php echo (int) $folder['id']; ?>">
+                      <div class="topic-card-banner">
+                        <?php if (!empty($folder['banner_image'])): ?>
+                          <img src="<?php echo e($folder['banner_image']); ?>" alt="<?php echo e($folder['name']); ?> wallpaper">
+                        <?php else: ?>
+                          <span><i class="fa-solid fa-folder-open"></i></span>
+                        <?php endif; ?>
+                      </div>
+                      <div class="topic-card-body">
+                        <span class="topic-card-icon"><i class="fa-solid fa-folder"></i></span>
+                        <div>
+                          <h3><?php echo e($folder['name']); ?></h3>
+                          <?php if (!empty($folder['description'])): ?>
+                            <p><?php echo e($folder['description']); ?></p>
+                          <?php endif; ?>
+                        </div>
+                      </div>
                     </a>
-                    <div class="material-folder-actions">
-                      <button type="button" class="learner-icon-button edit-topic-button" data-bs-toggle="modal" data-bs-target="#editTopicModal" data-topic-id="<?php echo (int) $folder['id']; ?>" data-name="<?php echo e($folder['name']); ?>" data-description="<?php echo e((string) ($folder['description'] ?? '')); ?>" data-return-tool="tasks" aria-label="Edit topic">
+                    <div class="topic-card-actions">
+                      <form method="post" class="d-inline">
+                        <input type="hidden" name="action" value="move_material_folder">
+                        <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
+                        <input type="hidden" name="folder_id" value="<?php echo (int) $folder['id']; ?>">
+                        <input type="hidden" name="direction" value="up">
+                        <button type="submit" class="learner-icon-button topic-order-button" <?php echo $topicIndex === 0 ? 'disabled' : ''; ?> aria-label="Move topic up">
+                          <i class="fa-solid fa-arrow-up"></i>
+                        </button>
+                      </form>
+                      <form method="post" class="d-inline">
+                        <input type="hidden" name="action" value="move_material_folder">
+                        <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
+                        <input type="hidden" name="folder_id" value="<?php echo (int) $folder['id']; ?>">
+                        <input type="hidden" name="direction" value="down">
+                        <button type="submit" class="learner-icon-button topic-order-button" <?php echo $topicIndex === count($materialFolders) - 1 ? 'disabled' : ''; ?> aria-label="Move topic down">
+                          <i class="fa-solid fa-arrow-down"></i>
+                        </button>
+                      </form>
+                      <button type="button" class="learner-icon-button edit-topic-button" data-bs-toggle="modal" data-bs-target="#editTopicModal" data-topic-id="<?php echo (int) $folder['id']; ?>" data-name="<?php echo e($folder['name']); ?>" data-description="<?php echo e((string) ($folder['description'] ?? '')); ?>" data-banner-image="<?php echo e((string) ($folder['banner_image'] ?? '')); ?>" data-return-tool="tasks" aria-label="Edit topic">
                         <i class="fa-solid fa-pen"></i>
                       </button>
                       <form method="post" class="d-inline" onsubmit="return confirm('Delete this topic? Linked records will be unassigned only.');">
@@ -2333,7 +2545,7 @@ $credentialEmailStatus = $_GET['credential_email'] ?? '';
           </div>
           <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
         </div>
-        <form method="post" class="module-form">
+        <form method="post" class="module-form" enctype="multipart/form-data">
           <div class="modal-body">
             <input type="hidden" name="action" value="save_material_folder">
             <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
@@ -2346,6 +2558,11 @@ $credentialEmailStatus = $_GET['credential_email'] ?? '';
             <div>
               <label class="form-label" for="folder_description">Description</label>
               <textarea class="form-control" id="folder_description" name="folder_description" rows="3" placeholder="Optional topic notes"></textarea>
+            </div>
+            <div class="mt-3">
+              <label class="form-label" for="topic_banner_image">Topic wallpaper</label>
+              <input type="file" class="form-control" id="topic_banner_image" name="topic_banner_image" accept="image/png,image/jpeg,image/webp">
+              <div class="form-text">Recommended size: 1600 x 600 px. JPG, PNG, or WEBP up to 4MB.</div>
             </div>
           </div>
           <div class="modal-footer">
@@ -2369,13 +2586,14 @@ $credentialEmailStatus = $_GET['credential_email'] ?? '';
           </div>
           <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
         </div>
-        <form method="post" class="module-form">
+        <form method="post" class="module-form" enctype="multipart/form-data">
           <div class="modal-body">
             <input type="hidden" name="action" value="update_material_folder">
             <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
             <input type="hidden" name="tool" value="materials">
             <input type="hidden" id="edit_topic_id" name="folder_id">
             <input type="hidden" id="edit_topic_return_tool" name="return_tool" value="<?php echo e($tool); ?>">
+            <input type="hidden" id="edit_topic_existing_banner" name="existing_banner">
             <div class="mb-3">
               <label class="form-label" for="edit_topic_name">Topic name</label>
               <input type="text" class="form-control" id="edit_topic_name" name="folder_name" required>
@@ -2383,6 +2601,11 @@ $credentialEmailStatus = $_GET['credential_email'] ?? '';
             <div>
               <label class="form-label" for="edit_topic_description">Description</label>
               <textarea class="form-control" id="edit_topic_description" name="folder_description" rows="3" placeholder="Optional topic notes"></textarea>
+            </div>
+            <div class="mt-3">
+              <label class="form-label" for="edit_topic_banner_image">Replace topic wallpaper</label>
+              <input type="file" class="form-control" id="edit_topic_banner_image" name="topic_banner_image" accept="image/png,image/jpeg,image/webp">
+              <div class="form-text">Leave blank to keep the current wallpaper. Recommended size: 1600 x 600 px.</div>
             </div>
           </div>
           <div class="modal-footer">
@@ -2804,6 +3027,18 @@ $credentialEmailStatus = $_GET['credential_email'] ?? '';
 
   <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+  <?php if (in_array($credentialEmailStatus, ['sent', 'failed'], true)): ?>
+    <script>
+      window.credentialResetNotice = {
+        icon: '<?php echo $credentialEmailStatus === 'sent' ? 'success' : 'error'; ?>',
+        title: '<?php echo $credentialEmailStatus === 'sent' ? 'Credentials sent' : 'Email not sent'; ?>',
+        text: '<?php echo $credentialEmailStatus === 'sent'
+            ? 'The learner password was reset and the new login credentials were sent by email.'
+            : 'The learner password was reset, but the credential email could not be sent.'; ?>'
+      };
+    </script>
+  <?php endif; ?>
   <script>
     (function () {
       function refreshQuizQuestionLabels(container) {
@@ -2914,6 +3149,6 @@ $credentialEmailStatus = $_GET['credential_email'] ?? '';
       }
     })();
   </script>
-  <script src="js/app.js?v=topic-search-only"></script>
+  <script src="js/app.js?v=topic-banner-edit"></script>
 </body>
 </html>
