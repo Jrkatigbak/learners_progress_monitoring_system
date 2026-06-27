@@ -1,5 +1,10 @@
 .DS_Store
 config/Mailer.local.php
+database/
+*.sql
+*.sqlite
+*.sqlite3
+*.db
 uploads/learners/*
 !uploads/learners/.gitkeep
 uploads/courses/*
