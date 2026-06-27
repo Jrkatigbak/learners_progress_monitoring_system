@@ -3,7 +3,7 @@
 class Database
 {
     private string $host = '127.0.0.1';
-    // Keep the runtime connection aligned with database/schema.sql.
+    // Runtime uses the existing MySQL database; schema updates are managed outside the app.
     private string $database = 'kiwi_learners_progress_monitoring_system_db';
     private string $username = 'root';
     private string $password = '';

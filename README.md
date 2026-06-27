@@ -9,7 +9,7 @@ PHP, MySQL, Bootstrap 5, and jQuery system for managing learners, classes, cours
 
 ## Setup
 
-1. Import `database/schema.sql` into MySQL.
+1. Confirm the existing database is available in MySQL.
 2. Confirm database credentials in `config/Database.php`.
 3. Visit `index.php`, then login.
 4. For learner credential emails, set `KIWI_SMTP_PASSWORD` in the server environment.
