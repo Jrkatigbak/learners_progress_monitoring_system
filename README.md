@@ -11,5 +11,5 @@ PHP, MySQL, Bootstrap 5, and jQuery system for managing learners, classes, cours
 
 1. Confirm the existing database is available in MySQL.
 2. Confirm database credentials in `config/Database.php`.
-3. Visit `index.php`, then login.
-4. For learner credential emails, set `KIWI_SMTP_PASSWORD` in the server environment.
+3. For email notifications, either set `KIWI_SMTP_PASSWORD` in the server environment or copy `config/Mailer.local.example.php` to `config/Mailer.local.php` and set the mailbox password there.
+4. Visit `index.php`, then login.

@@ -156,8 +156,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $teacherPassword = resetTeacherLogin($pdo, $teacherName, $teacherEmail);
             $mailer = new SmtpMailer($mailerConfig);
             $emailStatus = sendTeacherCredentialEmail($mailer, $teacherEmail, $teacherName, $teacherPassword, appLoginUrl()) ? 'sent' : 'failed';
+            $mailError = $emailStatus === 'failed' ? '&mail_error=' . urlencode($mailer->getLastError()) : '';
 
-            header('Location: teachers.php?success=credentials_reset&email=' . $emailStatus);
+            header('Location: teachers.php?success=credentials_reset&email=' . $emailStatus . $mailError);
             exit;
         }
     }
@@ -301,7 +302,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $emailStatus = sendTeacherCredentialEmail($mailer, $email, $fullName, $teacherPassword, appLoginUrl()) ? 'sent' : 'failed';
                 }
 
-                header('Location: teachers.php?success=updated&email=' . $emailStatus);
+                $mailError = $emailStatus === 'failed' && isset($mailer) ? '&mail_error=' . urlencode($mailer->getLastError()) : '';
+                header('Location: teachers.php?success=updated&email=' . $emailStatus . $mailError);
                 exit;
             }
 
@@ -328,7 +330,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $emailStatus = sendTeacherCredentialEmail($mailer, $email, $fullName, $teacherPassword, appLoginUrl()) ? 'sent' : 'failed';
             }
 
-            header('Location: teachers.php?success=created&email=' . $emailStatus);
+            $mailError = $emailStatus === 'failed' && isset($mailer) ? '&mail_error=' . urlencode($mailer->getLastError()) : '';
+            header('Location: teachers.php?success=created&email=' . $emailStatus . $mailError);
             exit;
         } catch (PDOException $exception) {
             $errors[] = 'Teacher code already exists. Please use a new teacher code.';
@@ -412,6 +415,7 @@ $successMessages = [
     'credentials_reset' => 'Teacher credentials were reset.',
 ];
 $emailStatus = $_GET['email'] ?? '';
+$mailError = trim((string) ($_GET['mail_error'] ?? ''));
 ?>
 <!doctype html>
 <html lang="en">
@@ -488,6 +492,9 @@ $emailStatus = $_GET['email'] ?? '';
               Teacher portal login credentials were emailed successfully.
             <?php elseif ($emailStatus === 'failed'): ?>
               Teacher portal login was created, but the credential email could not be sent.
+              <?php if ($mailError !== ''): ?>
+                <div class="small mt-1"><?php echo e($mailError); ?></div>
+              <?php endif; ?>
             <?php else: ?>
               Teacher was saved without portal credentials because no email was provided.
             <?php endif; ?>
@@ -678,13 +685,14 @@ $emailStatus = $_GET['email'] ?? '';
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
   <?php if ($success === 'credentials_reset' && in_array($emailStatus, ['sent', 'failed'], true)): ?>
+    <?php $credentialResetText = $emailStatus === 'sent'
+        ? 'The teacher password was reset and the new login credentials were sent by email.'
+        : 'The teacher password was reset, but the credential email could not be sent.' . ($mailError !== '' ? ' ' . $mailError : ''); ?>
     <script>
       window.credentialResetNotice = {
-        icon: '<?php echo $emailStatus === 'sent' ? 'success' : 'error'; ?>',
-        title: '<?php echo $emailStatus === 'sent' ? 'Credentials sent' : 'Email not sent'; ?>',
-        text: '<?php echo $emailStatus === 'sent'
-            ? 'The teacher password was reset and the new login credentials were sent by email.'
-            : 'The teacher password was reset, but the credential email could not be sent.'; ?>'
+        icon: <?php echo json_encode($emailStatus === 'sent' ? 'success' : 'error'); ?>,
+        title: <?php echo json_encode($emailStatus === 'sent' ? 'Credentials sent' : 'Email not sent'); ?>,
+        text: <?php echo json_encode($credentialResetText); ?>
       };
     </script>
   <?php endif; ?>

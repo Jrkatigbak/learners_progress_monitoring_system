@@ -422,8 +422,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $mailer = new SmtpMailer($mailerConfig);
             $emailSent = sendClassLearnerCredentialEmail($mailer, $learnerEmail, $learnerName, $learnerPassword, classWorkspaceLoginUrl());
             $emailStatus = $emailSent ? 'sent' : 'failed';
+            $mailError = $emailStatus === 'failed' ? '&mail_error=' . urlencode($mailer->getLastError()) : '';
 
-            header('Location: class_workspace.php?class_id=' . $classId . '&tool=learners&success=learner_credentials_reset&credential_email=' . $emailStatus);
+            header('Location: class_workspace.php?class_id=' . $classId . '&tool=learners&success=learner_credentials_reset&credential_email=' . $emailStatus . $mailError);
             exit;
         }
 
@@ -1861,6 +1862,7 @@ $successMessages = [
     'grades_saved' => 'Grades saved successfully.',
 ];
 $credentialEmailStatus = $_GET['credential_email'] ?? '';
+$mailError = trim((string) ($_GET['mail_error'] ?? ''));
 ?>
 <!doctype html>
 <html lang="en">
@@ -3316,13 +3318,14 @@ $credentialEmailStatus = $_GET['credential_email'] ?? '';
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
   <?php if (in_array($credentialEmailStatus, ['sent', 'failed'], true)): ?>
+    <?php $credentialResetText = $credentialEmailStatus === 'sent'
+        ? 'The learner password was reset and the new login credentials were sent by email.'
+        : 'The learner password was reset, but the credential email could not be sent.' . ($mailError !== '' ? ' ' . $mailError : ''); ?>
     <script>
       window.credentialResetNotice = {
-        icon: '<?php echo $credentialEmailStatus === 'sent' ? 'success' : 'error'; ?>',
-        title: '<?php echo $credentialEmailStatus === 'sent' ? 'Credentials sent' : 'Email not sent'; ?>',
-        text: '<?php echo $credentialEmailStatus === 'sent'
-            ? 'The learner password was reset and the new login credentials were sent by email.'
-            : 'The learner password was reset, but the credential email could not be sent.'; ?>'
+        icon: <?php echo json_encode($credentialEmailStatus === 'sent' ? 'success' : 'error'); ?>,
+        title: <?php echo json_encode($credentialEmailStatus === 'sent' ? 'Credentials sent' : 'Email not sent'); ?>,
+        text: <?php echo json_encode($credentialResetText); ?>
       };
     </script>
   <?php endif; ?>

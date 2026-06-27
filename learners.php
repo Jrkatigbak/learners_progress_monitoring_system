@@ -341,6 +341,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $redirectUrl = 'learners.php?success=updated';
                 if ($teacherEmailStatus !== '') {
                     $redirectUrl .= '&teacher_email=' . $teacherEmailStatus;
+                    if ($teacherEmailStatus === 'failed' && isset($mailer)) {
+                        $redirectUrl .= '&teacher_mail_error=' . urlencode($mailer->getLastError());
+                    }
                 }
 
                 header('Location: ' . $redirectUrl);
@@ -399,17 +402,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $mailer = new SmtpMailer($mailerConfig);
                 $emailSent = sendLearnerCredentialEmail($mailer, $email, $fullName, $learnerPassword, appLoginUrl());
                 $emailStatus = $emailSent ? 'sent' : 'failed';
+                $learnerMailError = $emailStatus === 'failed' ? $mailer->getLastError() : '';
             }
 
             if ($teacherCredential !== null) {
                 $mailer = isset($mailer) ? $mailer : new SmtpMailer($mailerConfig);
                 $teacherEmailSent = sendTeacherCredentialEmail($mailer, $teacherCredential['email'], $teacherCredential['name'], $teacherCredential['password'], appLoginUrl());
                 $teacherEmailStatus = $teacherEmailSent ? 'sent' : 'failed';
+                $teacherMailError = $teacherEmailStatus === 'failed' ? $mailer->getLastError() : '';
             }
 
             $redirectUrl = 'learners.php?success=created&email=' . $emailStatus;
+            if (!empty($learnerMailError)) {
+                $redirectUrl .= '&mail_error=' . urlencode($learnerMailError);
+            }
             if ($teacherEmailStatus !== '') {
                 $redirectUrl .= '&teacher_email=' . $teacherEmailStatus;
+                if (!empty($teacherMailError)) {
+                    $redirectUrl .= '&teacher_mail_error=' . urlencode($teacherMailError);
+                }
             }
 
             header('Location: ' . $redirectUrl);
@@ -481,6 +492,8 @@ $successMessages = [
 ];
 $emailStatus = $_GET['email'] ?? '';
 $teacherEmailStatus = $_GET['teacher_email'] ?? '';
+$mailError = trim((string) ($_GET['mail_error'] ?? ''));
+$teacherMailError = trim((string) ($_GET['teacher_mail_error'] ?? ''));
 $toastIcon = '';
 $toastTitle = '';
 $toastText = '';
@@ -497,7 +510,7 @@ if ($errors) {
         $toastText = 'Login credentials were emailed to the learner.';
     } elseif ($emailStatus === 'failed') {
         $toastIcon = 'warning';
-        $toastText = 'Learner login was created, but the credential email could not be sent.';
+        $toastText = 'Learner login was created, but the credential email could not be sent.' . ($mailError !== '' ? "\n" . $mailError : '');
     } elseif ($emailStatus === 'skipped') {
         $toastIcon = 'info';
         $toastText = 'Learner was added without login credentials because no email was provided.';
@@ -507,7 +520,7 @@ if ($errors) {
         $toastText = trim($toastText . "\nTeacher account was created and teacher credentials were emailed.");
     } elseif ($teacherEmailStatus === 'failed') {
         $toastIcon = 'warning';
-        $toastText = trim($toastText . "\nTeacher account was created, but the teacher credential email could not be sent.");
+        $toastText = trim($toastText . "\nTeacher account was created, but the teacher credential email could not be sent." . ($teacherMailError !== '' ? "\n" . $teacherMailError : ''));
     }
 }
 ?>

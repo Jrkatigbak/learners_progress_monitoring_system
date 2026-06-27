@@ -1,4 +1,5 @@
 .DS_Store
+config/Mailer.local.php
 uploads/learners/*
 !uploads/learners/.gitkeep
 uploads/courses/*

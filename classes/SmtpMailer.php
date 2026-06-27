@@ -18,24 +18,45 @@ class SmtpMailer
     public function send(string $toEmail, string $toName, string $subject, string $htmlBody, string $textBody): bool
     {
         $this->lastError = '';
-        $host = $this->config['host'];
+        $host = trim((string) ($this->config['host'] ?? ''));
         $port = (int) $this->config['port'];
-        $scheme = ($this->config['encryption'] ?? 'ssl') === 'ssl' ? 'ssl://' : '';
-        $socket = @fsockopen($scheme . $host, $port, $errno, $errstr, 3);
+        $encryption = strtolower((string) ($this->config['encryption'] ?? 'ssl'));
+        $username = trim((string) ($this->config['username'] ?? ''));
+        $password = (string) ($this->config['password'] ?? '');
 
-        if (!$socket) {
-            $this->lastError = 'Could not connect to mail server.';
+        if ($host === '' || $username === '' || $password === '') {
+            $this->lastError = 'SMTP is not fully configured.';
             return false;
         }
 
-        stream_set_timeout($socket, 3);
+        $scheme = $encryption === 'ssl' ? 'ssl://' : '';
+        $socket = @fsockopen($scheme . $host, $port, $errno, $errstr, 10);
+
+        if (!$socket) {
+            $this->lastError = 'Could not connect to mail server: ' . ($errstr !== '' ? $errstr : 'connection failed') . '.';
+            return false;
+        }
+
+        stream_set_timeout($socket, 10);
 
         try {
             $this->expect($socket, [220]);
             $this->command($socket, 'EHLO ' . ($_SERVER['SERVER_NAME'] ?? 'localhost'), [250]);
+
+            if ($encryption === 'tls' || $encryption === 'starttls') {
+                // Hostinger can also run on STARTTLS; upgrade the socket before authenticating.
+                $this->command($socket, 'STARTTLS', [220]);
+
+                if (!stream_socket_enable_crypto($socket, true, STREAM_CRYPTO_METHOD_TLS_CLIENT)) {
+                    throw new RuntimeException('Could not start secure mail connection.');
+                }
+
+                $this->command($socket, 'EHLO ' . ($_SERVER['SERVER_NAME'] ?? 'localhost'), [250]);
+            }
+
             $this->command($socket, 'AUTH LOGIN', [334]);
-            $this->command($socket, base64_encode($this->config['username']), [334]);
-            $this->command($socket, base64_encode($this->config['password']), [235]);
+            $this->command($socket, base64_encode($username), [334]);
+            $this->command($socket, base64_encode($password), [235]);
             $this->command($socket, 'MAIL FROM:<' . $this->config['from_email'] . '>', [250]);
             $this->command($socket, 'RCPT TO:<' . $toEmail . '>', [250, 251]);
             $this->command($socket, 'DATA', [354]);
@@ -93,7 +114,7 @@ class SmtpMailer
         $code = (int) substr($response, 0, 3);
 
         if (!in_array($code, $expectedCodes, true)) {
-            throw new RuntimeException('Mail server rejected the message.');
+            throw new RuntimeException('Mail server rejected the message: ' . trim($response));
         }
 
         return $response;
