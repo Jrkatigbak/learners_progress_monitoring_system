@@ -257,7 +257,7 @@ function replaceQuizQuestions(PDO $pdo, int $quizId, array $preparedQuestions): 
 
 $classId = (int) ($_GET['class_id'] ?? $_POST['class_id'] ?? 0);
 $tool = $_GET['tool'] ?? $_POST['tool'] ?? 'dashboard';
-$allowedTools = ['dashboard', 'learners', 'materials', 'quizzes', 'assignments', 'tasks', 'grades'];
+$allowedTools = ['dashboard', 'learners', 'teachers', 'materials', 'quizzes', 'assignments', 'tasks', 'grades'];
 $tool = in_array($tool, $allowedTools, true) ? $tool : 'dashboard';
 $errors = [];
 $success = $_GET['success'] ?? '';
@@ -305,13 +305,8 @@ if (is_dir($topicUploadDirectory)) {
 }
 
 $classStatement = $pdo->prepare(
-    'SELECT classes.*,
-            COALESCE(teachers.full_name, classes.teacher) AS display_teacher,
-            teachers.profile_photo AS teacher_photo,
-            teachers.teacher_code AS teacher_code,
-            teachers.specialization AS teacher_specialization
+    'SELECT classes.*
      FROM classes
-     LEFT JOIN teachers ON teachers.id = classes.teacher_id
      WHERE classes.id = :id
      LIMIT 1'
 );
@@ -323,17 +318,47 @@ if (!$class) {
     exit;
 }
 
+$assignedTeacherStatement = $pdo->prepare(
+    'SELECT teachers.*
+     FROM class_teachers
+     INNER JOIN teachers ON teachers.id = class_teachers.teacher_id
+     WHERE class_teachers.class_id = :class_id
+     ORDER BY teachers.full_name'
+);
+$assignedTeacherStatement->execute(['class_id' => $classId]);
+$assignedTeachers = $assignedTeacherStatement->fetchAll();
+$assignedTeacherIds = array_map(static fn ($teacher): int => (int) $teacher['id'], $assignedTeachers);
+
+if (!$assignedTeachers && !empty($class['teacher_id'])) {
+    // Older class records may still only use classes.teacher_id, so keep them visible until reassigned.
+    $legacyTeacherStatement = $pdo->prepare('SELECT * FROM teachers WHERE id = :id LIMIT 1');
+    $legacyTeacherStatement->execute(['id' => (int) $class['teacher_id']]);
+    $legacyTeacher = $legacyTeacherStatement->fetch() ?: null;
+
+    if ($legacyTeacher) {
+        $assignedTeachers[] = $legacyTeacher;
+        $assignedTeacherIds[] = (int) $legacyTeacher['id'];
+    }
+}
+
+$class['display_teacher'] = $assignedTeachers
+    ? implode(', ', array_map(static fn ($teacher): string => (string) $teacher['full_name'], $assignedTeachers))
+    : (string) ($class['teacher'] ?? '');
+$primaryTeacher = $assignedTeachers[0] ?? null;
+
 if ($isTeacher) {
     $teacherStatement = $pdo->prepare('SELECT * FROM teachers WHERE email = :email LIMIT 1');
     $teacherStatement->execute(['email' => $currentUser['email']]);
     $teacherProfile = $teacherStatement->fetch() ?: null;
 
-    if (!$teacherProfile || (int) ($class['teacher_id'] ?? 0) !== (int) $teacherProfile['id']) {
-        // Teachers can manage only the class connected to their teacher profile.
+    if (!$teacherProfile || !in_array((int) $teacherProfile['id'], $assignedTeacherIds, true)) {
+        // Teachers can manage only classes they are assigned to from the class workspace.
         header('Location: teacher_dashboard.php');
         exit;
     }
 }
+
+$activeTeacherId = $isTeacher && $teacherProfile ? (int) $teacherProfile['id'] : (int) ($primaryTeacher['id'] ?? 0);
 
 $courseId = classCourseId($pdo, $class);
 
@@ -459,6 +484,92 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         $tool = 'learners';
+    }
+
+    if ($action === 'add_class_teachers') {
+        $selectedTeacherIds = array_map('intval', $_POST['teacher_ids'] ?? []);
+        $selectedTeacherIds = array_values(array_unique(array_filter($selectedTeacherIds)));
+
+        if (!$isAdmin) {
+            $errors[] = 'Only administrators can add teachers to a class.';
+        }
+
+        if (!$selectedTeacherIds) {
+            $errors[] = 'Select at least one teacher.';
+        }
+
+        if (!$errors) {
+            // Assign teachers through the class_teachers join table and ignore teachers already assigned.
+            $eligibleStatement = $pdo->prepare(
+                'SELECT teachers.id
+                 FROM teachers
+                 LEFT JOIN class_teachers
+                    ON class_teachers.teacher_id = teachers.id
+                   AND class_teachers.class_id = :class_id
+                 LEFT JOIN classes AS legacy_class
+                    ON legacy_class.id = :legacy_class_id
+                   AND legacy_class.teacher_id = teachers.id
+                 WHERE teachers.id = :teacher_id
+                   AND teachers.status = "Active"
+                   AND class_teachers.id IS NULL
+                   AND legacy_class.id IS NULL
+                 LIMIT 1'
+            );
+            $assignStatement = $pdo->prepare(
+                'INSERT IGNORE INTO class_teachers (class_id, teacher_id)
+                 VALUES (:class_id, :teacher_id)'
+            );
+            $addedCount = 0;
+
+            foreach ($selectedTeacherIds as $teacherId) {
+                $eligibleStatement->execute([
+                    'teacher_id' => $teacherId,
+                    'class_id' => $classId,
+                    'legacy_class_id' => $classId,
+                ]);
+
+                if (!$eligibleStatement->fetch()) {
+                    continue;
+                }
+
+                $assignStatement->execute([
+                    'class_id' => $classId,
+                    'teacher_id' => $teacherId,
+                ]);
+                $addedCount++;
+            }
+
+            header('Location: class_workspace.php?class_id=' . $classId . '&tool=teachers&success=teachers_added&added=' . $addedCount);
+            exit;
+        }
+
+        $tool = 'teachers';
+    }
+
+    if ($action === 'remove_class_teacher') {
+        $teacherId = (int) ($_POST['teacher_id'] ?? 0);
+
+        if (!$isAdmin) {
+            $errors[] = 'Only administrators can remove teachers from a class.';
+        }
+
+        if ($teacherId <= 0) {
+            $errors[] = 'Select a valid teacher.';
+        }
+
+        if (!$errors) {
+            // Removing an assignment keeps the teacher masterlist and login account intact.
+            $removeStatement = $pdo->prepare('DELETE FROM class_teachers WHERE class_id = :class_id AND teacher_id = :teacher_id');
+            $removeStatement->execute([
+                'class_id' => $classId,
+                'teacher_id' => $teacherId,
+            ]);
+
+            header('Location: class_workspace.php?class_id=' . $classId . '&tool=teachers&success=teacher_removed');
+            exit;
+        }
+
+        $tool = 'teachers';
     }
 
     if ($action === 'save_material') {
@@ -1321,7 +1432,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $taskStatement->execute([
                 'class_id' => $classId,
                 'folder_id' => $taskTopicId > 0 ? $taskTopicId : null,
-                'teacher_id' => !empty($class['teacher_id']) ? (int) $class['teacher_id'] : null,
+                'teacher_id' => $activeTeacherId > 0 ? $activeTeacherId : null,
                 'task_title' => $title,
                 'description' => $description !== '' ? $description : null,
                 'task_date' => $taskDate,
@@ -1449,7 +1560,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         'task_id' => $taskId,
                         'learner_id' => $learnerId,
                         'class_id' => $classId,
-                        'teacher_id' => !empty($class['teacher_id']) ? (int) $class['teacher_id'] : null,
+                        'teacher_id' => $activeTeacherId > 0 ? $activeTeacherId : null,
                         'grade_title' => $task['task_title'],
                         'score' => $score,
                         'remarks' => $remark !== '' ? $remark : null,
@@ -1502,6 +1613,26 @@ $availableLearnerStatement->execute([
     'course_id' => $courseId,
 ]);
 $availableLearners = $availableLearnerStatement->fetchAll();
+
+$availableTeacherStatement = $pdo->prepare(
+    'SELECT teachers.*
+     FROM teachers
+     LEFT JOIN class_teachers
+        ON class_teachers.teacher_id = teachers.id
+       AND class_teachers.class_id = :class_id
+     LEFT JOIN classes AS legacy_class
+        ON legacy_class.id = :legacy_class_id
+       AND legacy_class.teacher_id = teachers.id
+     WHERE teachers.status = "Active"
+       AND class_teachers.id IS NULL
+       AND legacy_class.id IS NULL
+     ORDER BY teachers.full_name'
+);
+$availableTeacherStatement->execute([
+    'class_id' => $classId,
+    'legacy_class_id' => $classId,
+]);
+$availableTeachers = $availableTeacherStatement->fetchAll();
 
 $tasksStatement = $pdo->prepare(
     'SELECT class_tasks.*,
@@ -1704,12 +1835,14 @@ $classAverage = (float) $classAverageStatement->fetchColumn();
 $gradeCountStatement = $pdo->prepare('SELECT COUNT(*) FROM learner_grades WHERE class_id = :class_id');
 $gradeCountStatement->execute(['class_id' => $classId]);
 $gradeCount = (int) $gradeCountStatement->fetchColumn();
-$teacherName = (string) ($class['display_teacher'] ?? '');
+$teacherName = (string) ($primaryTeacher['full_name'] ?? ($class['display_teacher'] ?? ''));
 $teacherInitials = $teacherName !== '' ? strtoupper(substr($teacherName, 0, 1)) : 'T';
 
 $successMessages = [
     'learners_added' => 'Learners added successfully.',
     'learner_credentials_reset' => 'Learner credentials were reset.',
+    'teachers_added' => 'Teachers added successfully.',
+    'teacher_removed' => 'Teacher removed from this class.',
     'topic_created' => 'Topic added successfully.',
     'topic_updated' => 'Topic updated successfully.',
     'topic_deleted' => 'Topic deleted successfully.',
@@ -1742,7 +1875,7 @@ $credentialEmailStatus = $_GET['credential_email'] ?? '';
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=topic-cards-wallpaper" rel="stylesheet">
+  <link href="css/style.css?v=class-teachers-tab" rel="stylesheet">
 </head>
 <body class="dashboard-page class-workspace-page class-workspace-<?php echo e($tool); ?>">
   <div class="app-layout">
@@ -1757,6 +1890,7 @@ $credentialEmailStatus = $_GET['credential_email'] ?? '';
       <nav class="sidebar-nav">
         <a class="<?php echo $tool === 'dashboard' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=dashboard"><i class="fa-solid fa-gauge-high"></i> Class Dashboard</a>
         <a class="<?php echo $tool === 'learners' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=learners"><i class="fa-solid fa-users"></i> Learners</a>
+        <a class="<?php echo $tool === 'teachers' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=teachers"><i class="fa-solid fa-user-tie"></i> Teachers</a>
         <a class="<?php echo $tool === 'materials' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=materials"><i class="fa-solid fa-folder-open"></i> Materials</a>
         <a class="<?php echo $tool === 'quizzes' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=quizzes"><i class="fa-solid fa-circle-question"></i> Quizzes</a>
         <a class="<?php echo $tool === 'assignments' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=assignments"><i class="fa-solid fa-file-pen"></i> Assignments</a>
@@ -1765,8 +1899,8 @@ $credentialEmailStatus = $_GET['credential_email'] ?? '';
         <a href="<?php echo $isTeacher ? 'teacher_dashboard.php' : 'classes.php'; ?>"><i class="fa-solid fa-arrow-left"></i> Back to Classes</a>
       </nav>
       <div class="sidebar-footer">
-        <p class="mb-1">Teacher</p>
-        <strong><?php echo e($class['display_teacher'] ?? ''); ?></strong>
+        <p class="mb-1">Assigned Teachers</p>
+        <strong><?php echo e($assignedTeachers ? count($assignedTeachers) . ' teacher' . (count($assignedTeachers) === 1 ? '' : 's') : 'None assigned'); ?></strong>
       </div>
     </aside>
 
@@ -1837,12 +1971,12 @@ $credentialEmailStatus = $_GET['credential_email'] ?? '';
           <div class="row g-4">
             <div class="col-md-6">
               <div class="panel-card class-teacher-profile-card h-100">
-                <span class="section-kicker">Teacher</span>
+                <span class="section-kicker">Teachers</span>
                 <div class="class-teacher-profile">
                   <div class="class-teacher-photo">
-                    <?php if (!empty($class['teacher_photo'])): ?>
-                      <button type="button" class="learner-photo-viewer-button" data-bs-toggle="modal" data-bs-target="#learnerPhotoModal" data-photo="<?php echo e($class['teacher_photo']); ?>" data-name="<?php echo e($teacherName); ?>" aria-label="View <?php echo e($teacherName); ?> profile picture">
-                        <img src="<?php echo e($class['teacher_photo']); ?>" alt="<?php echo e($teacherName); ?> profile picture">
+                    <?php if (!empty($primaryTeacher['profile_photo'])): ?>
+                      <button type="button" class="learner-photo-viewer-button" data-bs-toggle="modal" data-bs-target="#learnerPhotoModal" data-photo="<?php echo e($primaryTeacher['profile_photo']); ?>" data-name="<?php echo e($teacherName); ?>" aria-label="View <?php echo e($teacherName); ?> profile picture">
+                        <img src="<?php echo e($primaryTeacher['profile_photo']); ?>" alt="<?php echo e($teacherName); ?> profile picture">
                       </button>
                     <?php else: ?>
                       <span><?php echo e($teacherInitials); ?></span>
@@ -1850,11 +1984,15 @@ $credentialEmailStatus = $_GET['credential_email'] ?? '';
                   </div>
                   <div>
                     <h2 class="h5 mb-1"><?php echo e($teacherName ?: 'No teacher assigned'); ?></h2>
-                    <?php if (!empty($class['teacher_code'])): ?>
-                      <p class="text-secondary mb-1"><?php echo e($class['teacher_code']); ?></p>
-                    <?php endif; ?>
-                    <?php if (!empty($class['teacher_specialization'])): ?>
-                      <p class="mb-0"><?php echo e($class['teacher_specialization']); ?></p>
+                    <?php if ($assignedTeachers): ?>
+                      <p class="text-secondary mb-1"><?php echo count($assignedTeachers); ?> assigned teacher<?php echo count($assignedTeachers) === 1 ? '' : 's'; ?></p>
+                      <?php if (count($assignedTeachers) > 1): ?>
+                        <p class="mb-0"><?php echo e(implode(', ', array_slice(array_map(static fn ($teacher): string => (string) $teacher['full_name'], $assignedTeachers), 0, 3))); ?></p>
+                      <?php elseif (!empty($primaryTeacher['specialization'])): ?>
+                        <p class="mb-0"><?php echo e($primaryTeacher['specialization']); ?></p>
+                      <?php endif; ?>
+                    <?php else: ?>
+                      <p class="text-secondary mb-0">Add teachers from the Teachers tab.</p>
                     <?php endif; ?>
                   </div>
                 </div>
@@ -1954,6 +2092,74 @@ $credentialEmailStatus = $_GET['credential_email'] ?? '';
                       <h3><?php echo e($fullName); ?></h3>
                       <p class="learner-number"><?php echo e($learner['learner_number']); ?></p>
                     </div>
+                  </article>
+                <?php endforeach; ?>
+              </div>
+            <?php endif; ?>
+          </div>
+        <?php endif; ?>
+
+        <?php if ($tool === 'teachers'): ?>
+          <div class="panel-card">
+            <div class="d-flex flex-wrap align-items-center justify-content-between gap-3 mb-4">
+              <div>
+                <span class="section-kicker">Teachers</span>
+                <h2 class="h5 mb-0">Assigned teachers</h2>
+              </div>
+              <div class="d-flex flex-wrap align-items-center gap-2">
+                <span class="badge text-bg-primary"><?php echo count($assignedTeachers); ?> total</span>
+                <?php if ($isAdmin): ?>
+                  <button type="button" class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#addClassTeachersModal">
+                    <i class="fa-solid fa-user-plus me-2"></i>Add Teachers
+                  </button>
+                <?php endif; ?>
+              </div>
+            </div>
+
+            <?php if (!$assignedTeachers): ?>
+              <div class="empty-state">
+                <i class="fa-solid fa-user-tie"></i>
+                <p>No teachers are assigned to this class yet.</p>
+              </div>
+            <?php else: ?>
+              <div class="teacher-card-grid">
+                <?php foreach ($assignedTeachers as $teacher): ?>
+                  <?php $teacherInitial = strtoupper(substr((string) $teacher['full_name'], 0, 1)); ?>
+                  <article class="teacher-card">
+                    <div class="teacher-card-body">
+                      <div class="teacher-card-media">
+                        <?php if (!empty($teacher['profile_photo'])): ?>
+                          <button type="button" class="learner-photo-viewer-button" data-bs-toggle="modal" data-bs-target="#learnerPhotoModal" data-photo="<?php echo e($teacher['profile_photo']); ?>" data-name="<?php echo e($teacher['full_name']); ?>" aria-label="View <?php echo e($teacher['full_name']); ?> profile picture">
+                            <img src="<?php echo e($teacher['profile_photo']); ?>" alt="<?php echo e($teacher['full_name']); ?>">
+                          </button>
+                        <?php else: ?>
+                          <span><?php echo e($teacherInitial); ?></span>
+                        <?php endif; ?>
+                      </div>
+                      <h3><?php echo e($teacher['full_name']); ?></h3>
+                      <p class="learner-number"><?php echo e($teacher['teacher_code']); ?></p>
+                      <div class="teacher-card-meta">
+                        <?php if (!empty($teacher['specialization'])): ?>
+                          <span><i class="fa-solid fa-certificate"></i><?php echo e($teacher['specialization']); ?></span>
+                        <?php endif; ?>
+                        <?php if (!empty($teacher['email'])): ?>
+                          <span><i class="fa-regular fa-envelope"></i><?php echo e($teacher['email']); ?></span>
+                        <?php endif; ?>
+                      </div>
+                    </div>
+                    <?php if ($isAdmin): ?>
+                      <footer class="teacher-card-footer">
+                        <form method="post" onsubmit="return confirm('Remove this teacher from this class?');">
+                          <input type="hidden" name="action" value="remove_class_teacher">
+                          <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
+                          <input type="hidden" name="tool" value="teachers">
+                          <input type="hidden" name="teacher_id" value="<?php echo (int) $teacher['id']; ?>">
+                          <button type="submit" class="learner-icon-button is-danger" aria-label="Remove teacher from class">
+                            <i class="fa-solid fa-user-minus"></i>
+                          </button>
+                        </form>
+                      </footer>
+                    <?php endif; ?>
                   </article>
                 <?php endforeach; ?>
               </div>
@@ -2302,61 +2508,66 @@ $credentialEmailStatus = $_GET['credential_email'] ?? '';
                 <span class="input-group-text"><i class="fa-solid fa-magnifying-glass"></i></span>
                 <input type="search" class="form-control" id="topicSearchInput" placeholder="Search topics">
               </div>
-              <div class="material-folder-grid mb-5">
+              <div class="class-card-grid topic-card-grid mb-5">
                 <?php foreach ($materialFolders as $topicIndex => $folder): ?>
                   <?php $topicSearchText = strtolower(trim($folder['name'] . ' ' . ($folder['description'] ?? ''))); ?>
-                  <article class="topic-library-card topic-search-card" data-topic-search="<?php echo e($topicSearchText); ?>">
-                    <a class="topic-library-link" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=materials&topic_id=<?php echo (int) $folder['id']; ?>">
-                      <div class="topic-card-banner">
+                  <article class="class-card topic-library-card topic-search-card" data-topic-search="<?php echo e($topicSearchText); ?>">
+                    <a class="class-card-open-link topic-library-link" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=materials&topic_id=<?php echo (int) $folder['id']; ?>" aria-label="Open <?php echo e($folder['name']); ?> topic">
+                      <div class="class-wallpaper topic-card-banner">
                         <?php if (!empty($folder['banner_image'])): ?>
                           <img src="<?php echo e($folder['banner_image']); ?>" alt="<?php echo e($folder['name']); ?> wallpaper">
                         <?php else: ?>
-                          <span><i class="fa-solid fa-folder-open"></i></span>
+                          <div class="class-wallpaper-placeholder topic-wallpaper-placeholder">
+                            <i class="fa-solid fa-folder-open"></i>
+                          </div>
                         <?php endif; ?>
                       </div>
-                      <div class="topic-card-body">
-                        <span class="topic-card-icon"><i class="fa-solid fa-folder"></i></span>
-                        <div>
-                          <h3><?php echo e($folder['name']); ?></h3>
-                          <?php if (!empty($folder['description'])): ?>
-                            <p><?php echo e($folder['description']); ?></p>
-                          <?php endif; ?>
-                        </div>
+                      <div class="class-card-body topic-card-body">
+                        <h3><?php echo e($folder['name']); ?></h3>
+                        <p class="class-teacher"><i class="fa-solid fa-folder"></i>Learning topic</p>
+                        <?php if (!empty($folder['description'])): ?>
+                          <p class="class-description"><?php echo e($folder['description']); ?></p>
+                        <?php endif; ?>
                       </div>
                     </a>
-                    <div class="topic-card-actions">
-                      <form method="post" class="d-inline">
-                        <input type="hidden" name="action" value="move_material_folder">
-                        <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
-                        <input type="hidden" name="folder_id" value="<?php echo (int) $folder['id']; ?>">
-                        <input type="hidden" name="direction" value="up">
-                        <button type="submit" class="learner-icon-button topic-order-button" <?php echo $topicIndex === 0 ? 'disabled' : ''; ?> aria-label="Move topic up">
-                          <i class="fa-solid fa-arrow-up"></i>
-                        </button>
-                      </form>
-                      <form method="post" class="d-inline">
-                        <input type="hidden" name="action" value="move_material_folder">
-                        <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
-                        <input type="hidden" name="folder_id" value="<?php echo (int) $folder['id']; ?>">
-                        <input type="hidden" name="direction" value="down">
-                        <button type="submit" class="learner-icon-button topic-order-button" <?php echo $topicIndex === count($materialFolders) - 1 ? 'disabled' : ''; ?> aria-label="Move topic down">
-                          <i class="fa-solid fa-arrow-down"></i>
-                        </button>
-                      </form>
+                    <footer class="class-card-footer topic-card-actions">
+                      <div class="class-order-actions" aria-label="Reorder <?php echo e($folder['name']); ?> topic">
+                        <form method="post">
+                          <input type="hidden" name="action" value="move_material_folder">
+                          <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
+                          <input type="hidden" name="folder_id" value="<?php echo (int) $folder['id']; ?>">
+                          <input type="hidden" name="direction" value="up">
+                          <button type="submit" class="learner-icon-button topic-order-button" <?php echo $topicIndex === 0 ? 'disabled' : ''; ?> aria-label="Move topic up">
+                            <i class="fa-solid fa-arrow-up"></i>
+                          </button>
+                        </form>
+                        <form method="post">
+                          <input type="hidden" name="action" value="move_material_folder">
+                          <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
+                          <input type="hidden" name="folder_id" value="<?php echo (int) $folder['id']; ?>">
+                          <input type="hidden" name="direction" value="down">
+                          <button type="submit" class="learner-icon-button topic-order-button" <?php echo $topicIndex === count($materialFolders) - 1 ? 'disabled' : ''; ?> aria-label="Move topic down">
+                            <i class="fa-solid fa-arrow-down"></i>
+                          </button>
+                        </form>
+                      </div>
+                      <a class="btn btn-sm btn-primary" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=materials&topic_id=<?php echo (int) $folder['id']; ?>">
+                        <i class="fa-solid fa-folder-open me-2"></i>Open Topic
+                      </a>
                       <button type="button" class="learner-icon-button edit-topic-button" data-bs-toggle="modal" data-bs-target="#editTopicModal" data-topic-id="<?php echo (int) $folder['id']; ?>" data-name="<?php echo e($folder['name']); ?>" data-description="<?php echo e((string) ($folder['description'] ?? '')); ?>" data-banner-image="<?php echo e((string) ($folder['banner_image'] ?? '')); ?>" data-return-tool="tasks" aria-label="Edit topic">
                         <i class="fa-solid fa-pen"></i>
                       </button>
-                      <form method="post" class="d-inline" onsubmit="return confirm('Delete this topic? Linked records will be unassigned only.');">
+                      <form method="post" onsubmit="return confirm('Delete this topic? Linked records will be unassigned only.');">
                         <input type="hidden" name="action" value="delete_material_folder">
                         <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
                         <input type="hidden" name="tool" value="tasks">
                         <input type="hidden" name="return_tool" value="tasks">
                         <input type="hidden" name="folder_id" value="<?php echo (int) $folder['id']; ?>">
-                        <button type="submit" class="learner-icon-button text-danger" aria-label="Delete topic">
+                        <button type="submit" class="learner-icon-button is-danger" aria-label="Delete topic">
                           <i class="fa-solid fa-trash"></i>
                         </button>
                       </form>
-                    </div>
+                    </footer>
                   </article>
                 <?php endforeach; ?>
               </div>
@@ -2513,6 +2724,82 @@ $credentialEmailStatus = $_GET['credential_email'] ?? '';
             <span class="text-secondary small me-auto" id="classLearnerSelectedCount">0 selected</span>
             <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
             <button type="submit" class="btn btn-primary" <?php echo !$availableLearners ? 'disabled' : ''; ?>>
+              <i class="fa-solid fa-user-plus me-2"></i>Add Selected
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal fade" id="addClassTeachersModal" tabindex="-1" aria-labelledby="addClassTeachersModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable class-learner-picker-modal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <div>
+            <span class="section-kicker">Add Teachers</span>
+            <h2 class="modal-title h5" id="addClassTeachersModalLabel">Select teachers for <?php echo e($class['class_name']); ?></h2>
+          </div>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <form method="post" class="module-form">
+          <div class="modal-body">
+            <input type="hidden" name="action" value="add_class_teachers">
+            <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
+            <input type="hidden" name="tool" value="teachers">
+            <div class="row g-3 mb-4">
+              <div class="col-12">
+                <div class="input-group">
+                  <span class="input-group-text"><i class="fa-solid fa-magnifying-glass"></i></span>
+                  <input type="search" class="form-control" id="classTeacherSearch" placeholder="Search teacher name, code, email, or specialization">
+                </div>
+              </div>
+            </div>
+
+            <?php if (!$availableTeachers): ?>
+              <div class="empty-state">
+                <i class="fa-solid fa-circle-check"></i>
+                <p>All active teachers are already assigned to this class.</p>
+              </div>
+            <?php else: ?>
+              <div class="class-learner-picker-grid" id="classTeacherPickerGrid">
+                <?php foreach ($availableTeachers as $availableTeacher): ?>
+                  <?php
+                    $teacherSearch = strtolower(trim($availableTeacher['full_name'] . ' ' . $availableTeacher['teacher_code'] . ' ' . ($availableTeacher['email'] ?? '') . ' ' . ($availableTeacher['specialization'] ?? '')));
+                    $teacherInitial = strtoupper(substr((string) $availableTeacher['full_name'], 0, 1));
+                  ?>
+                  <label class="class-learner-picker-card class-teacher-picker-card" data-search="<?php echo e($teacherSearch); ?>">
+                    <input type="checkbox" name="teacher_ids[]" value="<?php echo (int) $availableTeacher['id']; ?>">
+                    <span class="class-learner-picker-photo">
+                      <?php if (!empty($availableTeacher['profile_photo'])): ?>
+                        <img src="<?php echo e($availableTeacher['profile_photo']); ?>" alt="<?php echo e($availableTeacher['full_name']); ?>">
+                      <?php else: ?>
+                        <span><?php echo e($teacherInitial); ?></span>
+                      <?php endif; ?>
+                    </span>
+                    <span class="class-learner-picker-info">
+                      <strong><?php echo e($availableTeacher['full_name']); ?></strong>
+                      <small><?php echo e($availableTeacher['teacher_code']); ?></small>
+                      <?php if (!empty($availableTeacher['email'])): ?>
+                        <small><?php echo e($availableTeacher['email']); ?></small>
+                      <?php endif; ?>
+                      <?php if (!empty($availableTeacher['specialization'])): ?>
+                        <small><?php echo e($availableTeacher['specialization']); ?></small>
+                      <?php endif; ?>
+                    </span>
+                  </label>
+                <?php endforeach; ?>
+              </div>
+              <div class="empty-state d-none" id="classTeacherNoResults">
+                <i class="fa-solid fa-magnifying-glass"></i>
+                <p>No available teachers match your filter.</p>
+              </div>
+            <?php endif; ?>
+          </div>
+          <div class="modal-footer">
+            <span class="text-secondary small me-auto" id="classTeacherSelectedCount">0 selected</span>
+            <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+            <button type="submit" class="btn btn-primary" <?php echo !$availableTeachers ? 'disabled' : ''; ?>>
               <i class="fa-solid fa-user-plus me-2"></i>Add Selected
             </button>
           </div>
@@ -3149,6 +3436,6 @@ $credentialEmailStatus = $_GET['credential_email'] ?? '';
       }
     })();
   </script>
-  <script src="js/app.js?v=topic-banner-edit"></script>
+  <script src="js/app.js?v=class-teacher-picker"></script>
 </body>
 </html>

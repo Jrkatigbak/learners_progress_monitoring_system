@@ -54,6 +54,23 @@ CREATE TABLE IF NOT EXISTS classes (
     ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Assigns one or more teachers to each class workspace.
+CREATE TABLE IF NOT EXISTS class_teachers (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  class_id INT UNSIGNED NOT NULL,
+  teacher_id INT UNSIGNED NOT NULL,
+  assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_class_teacher (class_id, teacher_id),
+  INDEX idx_class_teachers_class_id (class_id),
+  INDEX idx_class_teachers_teacher_id (teacher_id),
+  CONSTRAINT fk_class_teachers_class
+    FOREIGN KEY (class_id) REFERENCES classes(id)
+    ON DELETE CASCADE,
+  CONSTRAINT fk_class_teachers_teacher
+    FOREIGN KEY (teacher_id) REFERENCES teachers(id)
+    ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- Stores learner profiles with optional photos and progress tracking.
 CREATE TABLE IF NOT EXISTS learners (
   id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -390,6 +407,11 @@ UPDATE classes
 INNER JOIN teachers ON teachers.full_name = classes.teacher
 SET classes.teacher_id = teachers.id
 WHERE classes.teacher_id IS NULL;
+
+INSERT IGNORE INTO class_teachers (class_id, teacher_id)
+SELECT id, teacher_id
+FROM classes
+WHERE teacher_id IS NOT NULL;
 
 INSERT INTO learners (class_id, learner_number, first_name, last_name, email, phone, progress_percent, status, notes)
 SELECT id, 'LRN-2026-001', 'Andrea', 'Reyes', 'andrea.reyes@example.local', '0917 000 1001', 72, 'Active', 'Completing weekly progress reports.'

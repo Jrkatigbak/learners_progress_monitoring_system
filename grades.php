@@ -44,10 +44,18 @@ function canManageClass(PDO $pdo, bool $isTeacher, ?array $teacher, int $classId
         return false;
     }
 
-    $statement = $pdo->prepare('SELECT id FROM classes WHERE id = :class_id AND teacher_id = :teacher_id LIMIT 1');
+    $statement = $pdo->prepare(
+        'SELECT classes.id
+         FROM classes
+         LEFT JOIN class_teachers ON class_teachers.class_id = classes.id
+         WHERE classes.id = :class_id
+           AND (classes.teacher_id = :teacher_id OR class_teachers.teacher_id = :assigned_teacher_id)
+         LIMIT 1'
+    );
     $statement->execute([
         'class_id' => $classId,
         'teacher_id' => (int) $teacher['id'],
+        'assigned_teacher_id' => (int) $teacher['id'],
     ]);
 
     return (bool) $statement->fetch();
@@ -208,12 +216,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 if ($isTeacher && $teacher) {
     $classesStatement = $pdo->prepare(
-        'SELECT id, class_name, teacher
+        'SELECT classes.id, classes.class_name, classes.teacher
          FROM classes
-         WHERE teacher_id = :teacher_id
+         LEFT JOIN class_teachers ON class_teachers.class_id = classes.id
+         WHERE classes.teacher_id = :teacher_id
+            OR class_teachers.teacher_id = :assigned_teacher_id
+         GROUP BY classes.id
          ORDER BY class_name'
     );
-    $classesStatement->execute(['teacher_id' => (int) $teacher['id']]);
+    $classesStatement->execute([
+        'teacher_id' => (int) $teacher['id'],
+        'assigned_teacher_id' => (int) $teacher['id'],
+    ]);
     $classes = $classesStatement->fetchAll();
 } else {
     $classes = $pdo->query('SELECT id, class_name, teacher FROM classes ORDER BY class_name')->fetchAll();

@@ -113,6 +113,34 @@ $(function () {
   $(document).on('change', '.class-learner-picker-card input[type="checkbox"]', updateClassLearnerPicker);
   updateClassLearnerPicker();
 
+  function updateClassTeacherPicker() {
+    var keyword = ($('#classTeacherSearch').val() || '').toLowerCase().trim();
+    var visibleCount = 0;
+    var selectedCount = 0;
+
+    $('.class-teacher-picker-card').each(function () {
+      var $card = $(this);
+      var matchesKeyword = keyword === '' || ($card.attr('data-search') || '').indexOf(keyword) !== -1;
+
+      $card.toggleClass('d-none', !matchesKeyword);
+
+      if (matchesKeyword) {
+        visibleCount++;
+      }
+
+      if ($card.find('input[type="checkbox"]').prop('checked')) {
+        selectedCount++;
+      }
+    });
+
+    $('#classTeacherNoResults').toggleClass('d-none', visibleCount > 0);
+    $('#classTeacherSelectedCount').text(selectedCount + ' selected');
+  }
+
+  $('#classTeacherSearch').on('input', updateClassTeacherPicker);
+  $(document).on('change', '.class-teacher-picker-card input[type="checkbox"]', updateClassTeacherPicker);
+  updateClassTeacherPicker();
+
   function updateTopicSearch() {
     var keyword = ($('#topicSearchInput').val() || '').toLowerCase().trim();
     var visibleCount = 0;

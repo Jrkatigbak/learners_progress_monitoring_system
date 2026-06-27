@@ -19,14 +19,19 @@ $recentGrades = [];
 if ($teacher) {
     $classesStatement = $pdo->prepare(
         "SELECT classes.*,
-                COUNT(learners.id) AS learner_count
+                COUNT(DISTINCT learners.id) AS learner_count
          FROM classes
+         LEFT JOIN class_teachers ON class_teachers.class_id = classes.id
          LEFT JOIN learners ON learners.class_id = classes.id
          WHERE classes.teacher_id = :teacher_id
+            OR class_teachers.teacher_id = :assigned_teacher_id
          GROUP BY classes.id
          ORDER BY classes.class_name"
     );
-    $classesStatement->execute(['teacher_id' => (int) $teacher['id']]);
+    $classesStatement->execute([
+        'teacher_id' => (int) $teacher['id'],
+        'assigned_teacher_id' => (int) $teacher['id'],
+    ]);
     $classes = $classesStatement->fetchAll();
 
     $learnersStatement = $pdo->prepare(
@@ -34,10 +39,15 @@ if ($teacher) {
                 classes.class_name
          FROM learners
          INNER JOIN classes ON classes.id = learners.class_id
+         LEFT JOIN class_teachers ON class_teachers.class_id = classes.id
          WHERE classes.teacher_id = :teacher_id
+            OR class_teachers.teacher_id = :assigned_teacher_id
          ORDER BY classes.class_name, learners.first_name, learners.last_name"
     );
-    $learnersStatement->execute(['teacher_id' => (int) $teacher['id']]);
+    $learnersStatement->execute([
+        'teacher_id' => (int) $teacher['id'],
+        'assigned_teacher_id' => (int) $teacher['id'],
+    ]);
     $learners = $learnersStatement->fetchAll();
 
     $gradesStatement = $pdo->prepare(
@@ -49,11 +59,16 @@ if ($teacher) {
          FROM learner_grades
          INNER JOIN learners ON learners.id = learner_grades.learner_id
          INNER JOIN classes ON classes.id = learner_grades.class_id
+         LEFT JOIN class_teachers ON class_teachers.class_id = classes.id
          WHERE classes.teacher_id = :teacher_id
+            OR class_teachers.teacher_id = :assigned_teacher_id
          ORDER BY learner_grades.graded_at DESC, learner_grades.id DESC
          LIMIT 6"
     );
-    $gradesStatement->execute(['teacher_id' => (int) $teacher['id']]);
+    $gradesStatement->execute([
+        'teacher_id' => (int) $teacher['id'],
+        'assigned_teacher_id' => (int) $teacher['id'],
+    ]);
     $recentGrades = $gradesStatement->fetchAll();
 }
 

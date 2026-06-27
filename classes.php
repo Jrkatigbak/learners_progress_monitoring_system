@@ -121,8 +121,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     $id = (int) ($_POST['id'] ?? 0);
     $className = trim($_POST['class_name'] ?? '');
-    $teacherId = (int) ($_POST['teacher_id'] ?? 0);
-    $teacher = '';
     $status = $_POST['status'] ?? 'Active';
     $description = trim($_POST['description'] ?? '');
     $existingBanner = trim($_POST['existing_banner'] ?? '');
@@ -130,22 +128,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if ($className === '') {
         $errors[] = 'Class name is required.';
-    }
-
-    if ($teacherId <= 0) {
-        $errors[] = 'Choose a teacher.';
-    } else {
-        // Classes store teacher_id for relationships and teacher text for older views.
-        $teacherStatement = $pdo->prepare('SELECT full_name FROM teachers WHERE id = :id AND status = :status LIMIT 1');
-        $teacherStatement->execute([
-            'id' => $teacherId,
-            'status' => 'Active',
-        ]);
-        $teacher = (string) ($teacherStatement->fetchColumn() ?: '');
-
-        if ($teacher === '') {
-            $errors[] = 'Choose an active teacher from the masterlist.';
-        }
     }
 
     if (!in_array($status, ['Active', 'Inactive'], true)) {
@@ -190,8 +172,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $statement = $pdo->prepare(
                 'UPDATE classes
                  SET class_name = :class_name,
-                     teacher = :teacher,
-                     teacher_id = :teacher_id,
                      banner_image = :banner_image,
                      status = :status,
                      description = :description
@@ -199,8 +179,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             );
             $statement->execute([
                 'class_name' => $className,
-                'teacher' => $teacher,
-                'teacher_id' => $teacherId,
                 'banner_image' => $bannerImage !== '' ? $bannerImage : null,
                 'status' => $status,
                 'description' => $description !== '' ? $description : null,
@@ -215,12 +193,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $nextSortOrder = (int) $pdo->query('SELECT COALESCE(MAX(sort_order), 0) + 1 FROM classes')->fetchColumn();
         $statement = $pdo->prepare(
             'INSERT INTO classes (class_name, teacher_id, teacher, banner_image, status, description, sort_order)
-             VALUES (:class_name, :teacher_id, :teacher, :banner_image, :status, :description, :sort_order)'
+             VALUES (:class_name, NULL, :teacher, :banner_image, :status, :description, :sort_order)'
         );
         $statement->execute([
             'class_name' => $className,
-            'teacher_id' => $teacherId,
-            'teacher' => $teacher,
+            'teacher' => '',
             'banner_image' => $bannerImage !== '' ? $bannerImage : null,
             'status' => $status,
             'description' => $description !== '' ? $description : null,
@@ -234,8 +211,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $editingClass = [
         'id' => $id,
         'class_name' => $className,
-        'teacher_id' => $teacherId,
-        'teacher' => $teacher,
         'banner_image' => $bannerImage,
         'status' => $status,
         'description' => $description,
@@ -248,12 +223,28 @@ if ($search !== '') {
     // Search keeps the class list focused without changing the add/edit modal state.
     $classesStatement = $pdo->prepare(
         "SELECT classes.*,
-                COALESCE(teachers.full_name, classes.teacher) AS display_teacher
+                COALESCE(
+                    (
+                        SELECT GROUP_CONCAT(DISTINCT assigned_teachers.full_name ORDER BY assigned_teachers.full_name SEPARATOR ', ')
+                        FROM class_teachers
+                        INNER JOIN teachers AS assigned_teachers ON assigned_teachers.id = class_teachers.teacher_id
+                        WHERE class_teachers.class_id = classes.id
+                    ),
+                    teachers.full_name,
+                    classes.teacher
+                ) AS display_teacher
          FROM classes
          LEFT JOIN teachers ON teachers.id = classes.teacher_id
          WHERE classes.class_name LIKE :class_name_search
             OR classes.teacher LIKE :teacher_search
             OR teachers.full_name LIKE :teacher_master_search
+            OR EXISTS (
+                SELECT 1
+                FROM class_teachers
+                INNER JOIN teachers AS assigned_teachers ON assigned_teachers.id = class_teachers.teacher_id
+                WHERE class_teachers.class_id = classes.id
+                  AND assigned_teachers.full_name LIKE :assigned_teacher_search
+            )
             OR classes.status LIKE :status_search
             OR classes.description LIKE :description_search
          ORDER BY classes.sort_order ASC, classes.created_at DESC, classes.id DESC"
@@ -263,41 +254,33 @@ if ($search !== '') {
         'class_name_search' => $searchTerm,
         'teacher_search' => $searchTerm,
         'teacher_master_search' => $searchTerm,
+        'assigned_teacher_search' => $searchTerm,
         'status_search' => $searchTerm,
         'description_search' => $searchTerm,
     ]);
 } else {
     $classesStatement = $pdo->query(
         'SELECT classes.*,
-                COALESCE(teachers.full_name, classes.teacher) AS display_teacher
+                COALESCE(
+                    (
+                        SELECT GROUP_CONCAT(DISTINCT assigned_teachers.full_name ORDER BY assigned_teachers.full_name SEPARATOR ", ")
+                        FROM class_teachers
+                        INNER JOIN teachers AS assigned_teachers ON assigned_teachers.id = class_teachers.teacher_id
+                        WHERE class_teachers.class_id = classes.id
+                    ),
+                    teachers.full_name,
+                    classes.teacher
+                ) AS display_teacher
          FROM classes
          LEFT JOIN teachers ON teachers.id = classes.teacher_id
          ORDER BY classes.sort_order ASC, classes.created_at DESC, classes.id DESC'
     );
 }
 $classRows = $classesStatement->fetchAll();
-$teachers = $pdo->query(
-    "SELECT id, teacher_code, full_name, specialization
-     FROM teachers
-     WHERE status = 'Active'
-     ORDER BY full_name"
-)->fetchAll();
-
-if ($editingClass && empty($editingClass['teacher_id'])) {
-    // Older class rows may only have teacher text, so match them to the masterlist for edit forms.
-    foreach ($teachers as $teacherOption) {
-        if ((string) $teacherOption['full_name'] === (string) ($editingClass['teacher'] ?? '')) {
-            $editingClass['teacher_id'] = (int) $teacherOption['id'];
-            break;
-        }
-    }
-}
 
 $formClass = $editingClass ?: [
     'id' => 0,
     'class_name' => '',
-    'teacher_id' => 0,
-    'teacher' => '',
     'banner_image' => '',
     'status' => 'Active',
     'description' => '',
@@ -402,7 +385,7 @@ $successMessages = [
           <form method="get" class="search-bar mb-4">
             <div class="input-group">
               <span class="input-group-text"><i class="fa-solid fa-magnifying-glass"></i></span>
-              <input type="search" class="form-control" name="search" value="<?php echo e($search); ?>" placeholder="Search classes or teacher">
+              <input type="search" class="form-control" name="search" value="<?php echo e($search); ?>" placeholder="Search classes or assigned teacher">
               <button type="submit" class="btn btn-primary">Search</button>
               <?php if ($search !== ''): ?>
                 <a href="classes.php" class="btn btn-outline-secondary">Clear</a>
@@ -434,7 +417,7 @@ $successMessages = [
                     </div>
                     <div class="class-card-body">
                       <h3><?php echo e($classRow['class_name']); ?></h3>
-                      <p class="class-teacher"><i class="fa-solid fa-user-tie"></i><?php echo e($classRow['display_teacher'] ?? $classRow['teacher'] ?? ''); ?></p>
+                      <p class="class-teacher"><i class="fa-solid fa-user-tie"></i><?php echo e(($classRow['display_teacher'] ?? '') !== '' ? $classRow['display_teacher'] : 'No teacher assigned'); ?></p>
                       <?php if (!empty($classRow['description'])): ?>
                         <p class="class-description"><?php echo e($classRow['description']); ?></p>
                       <?php endif; ?>
@@ -509,21 +492,6 @@ $successMessages = [
             <div class="mb-3">
               <label class="form-label" for="class_name">Class name</label>
               <input type="text" class="form-control" id="class_name" name="class_name" value="<?php echo e($formClass['class_name']); ?>" required>
-            </div>
-            <div class="mb-3">
-              <label class="form-label" for="teacher">Teacher</label>
-              <select class="form-select" id="teacher" name="teacher_id" required>
-                <option value="">Choose teacher</option>
-                <?php foreach ($teachers as $teacherOption): ?>
-                  <option value="<?php echo (int) $teacherOption['id']; ?>" <?php echo (int) ($formClass['teacher_id'] ?? 0) === (int) $teacherOption['id'] ? 'selected' : ''; ?>>
-                    <?php echo e($teacherOption['full_name'] . ' - ' . $teacherOption['teacher_code']); ?>
-                    <?php echo !empty($teacherOption['specialization']) ? e(' (' . $teacherOption['specialization'] . ')') : ''; ?>
-                  </option>
-                <?php endforeach; ?>
-              </select>
-              <?php if (!$teachers): ?>
-                <div class="small text-danger mt-2">Add an active teacher in the Teachers masterlist first.</div>
-              <?php endif; ?>
             </div>
             <div class="mb-3">
               <label class="form-label" for="status">Status</label>

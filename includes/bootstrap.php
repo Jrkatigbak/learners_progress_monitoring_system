@@ -142,6 +142,27 @@ try {
          WHERE classes.teacher_id IS NULL"
     );
 
+    // Multiple teacher assignments are managed inside the class workspace.
+    $pdo->exec(
+        "CREATE TABLE IF NOT EXISTS class_teachers (
+          id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+          class_id INT UNSIGNED NOT NULL,
+          teacher_id INT UNSIGNED NOT NULL,
+          assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE KEY uniq_class_teacher (class_id, teacher_id),
+          INDEX idx_class_teachers_class_id (class_id),
+          INDEX idx_class_teachers_teacher_id (teacher_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    );
+
+    // Seed old single-teacher classes into the new assignment table once.
+    $pdo->exec(
+        "INSERT IGNORE INTO class_teachers (class_id, teacher_id)
+         SELECT id, teacher_id
+         FROM classes
+         WHERE teacher_id IS NOT NULL"
+    );
+
     // Teacher portal access uses teacher email accounts with a local default password.
     $teacherUsers = $pdo->query("SELECT full_name, email FROM teachers WHERE email IS NOT NULL AND email <> ''")->fetchAll();
     $teacherUserStatement = $pdo->prepare(

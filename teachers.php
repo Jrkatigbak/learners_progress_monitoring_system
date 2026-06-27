@@ -164,8 +164,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if ($action === 'delete') {
         $teacherId = (int) ($_POST['id'] ?? 0);
-        $classCountStatement = $pdo->prepare('SELECT COUNT(*) FROM classes WHERE teacher_id = :teacher_id');
-        $classCountStatement->execute(['teacher_id' => $teacherId]);
+        $classCountStatement = $pdo->prepare(
+            'SELECT COUNT(DISTINCT class_id)
+             FROM (
+                SELECT id AS class_id FROM classes WHERE teacher_id = :legacy_teacher_id
+                UNION
+                SELECT class_id FROM class_teachers WHERE teacher_id = :assigned_teacher_id
+             ) AS assigned_classes'
+        );
+        $classCountStatement->execute([
+            'legacy_teacher_id' => $teacherId,
+            'assigned_teacher_id' => $teacherId,
+        ]);
 
         if ((int) $classCountStatement->fetchColumn() > 0) {
             header('Location: teachers.php?success=in_use');
@@ -341,9 +351,16 @@ if ($search !== '') {
     // Search by core teacher identity fields.
     $teacherStatement = $pdo->prepare(
         "SELECT teachers.*,
-                COUNT(classes.id) AS class_count
+                (
+                    SELECT COUNT(DISTINCT assigned_classes.class_id)
+                    FROM (
+                        SELECT id AS class_id, teacher_id FROM classes WHERE teacher_id IS NOT NULL
+                        UNION
+                        SELECT class_id, teacher_id FROM class_teachers
+                    ) AS assigned_classes
+                    WHERE assigned_classes.teacher_id = teachers.id
+                ) AS class_count
          FROM teachers
-         LEFT JOIN classes ON classes.teacher_id = teachers.id
          WHERE teachers.teacher_code LIKE :teacher_code_search
             OR teachers.full_name LIKE :full_name_search
             OR teachers.email LIKE :email_search
@@ -361,9 +378,16 @@ if ($search !== '') {
 } else {
     $teacherStatement = $pdo->query(
         'SELECT teachers.*,
-                COUNT(classes.id) AS class_count
+                (
+                    SELECT COUNT(DISTINCT assigned_classes.class_id)
+                    FROM (
+                        SELECT id AS class_id, teacher_id FROM classes WHERE teacher_id IS NOT NULL
+                        UNION
+                        SELECT class_id, teacher_id FROM class_teachers
+                    ) AS assigned_classes
+                    WHERE assigned_classes.teacher_id = teachers.id
+                ) AS class_count
          FROM teachers
-         LEFT JOIN classes ON classes.teacher_id = teachers.id
          GROUP BY teachers.id
          ORDER BY teachers.created_at DESC, teachers.id DESC'
     );
