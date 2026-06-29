@@ -2,6 +2,7 @@
 
 require_once __DIR__ . '/includes/admin_guard.php';
 require_once __DIR__ . '/includes/enrollment_helpers.php';
+require_once __DIR__ . '/includes/class_status.php';
 
 kiwiRequirePermission($pdo, 'classes.manage');
 
@@ -84,9 +85,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         // Deleting a class now hides it while keeping the row for audit/history.
         $classIdToDelete = (int) ($_POST['id'] ?? 0);
-        $deleteStatement = $pdo->prepare('UPDATE classes SET deleted_at = NOW(), status = "Inactive" WHERE id = :id AND deleted_at IS NULL');
+        $deleteStatement = $pdo->prepare('UPDATE classes SET deleted_at = NOW(), status = "Cancelled" WHERE id = :id AND deleted_at IS NULL');
         $deleteStatement->execute(['id' => $classIdToDelete]);
-        $courseDeleteStatement = $pdo->prepare('UPDATE courses SET deleted_at = NOW(), status = "Inactive" WHERE course_code = :course_code AND deleted_at IS NULL');
+        $courseDeleteStatement = $pdo->prepare('UPDATE courses SET deleted_at = NOW(), status = "Cancelled" WHERE course_code = :course_code AND deleted_at IS NULL');
         $courseDeleteStatement->execute(['course_code' => 'CLASS-' . $classIdToDelete]);
         normalizeClassSortOrder($pdo);
 
@@ -148,7 +149,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $errors[] = 'Class name is required.';
     }
 
-    if (!in_array($status, ['Active', 'Inactive'], true)) {
+    if (!in_array($status, kiwiClassStatusOptions(), true)) {
         $errors[] = 'Choose a valid status.';
     }
 
@@ -263,7 +264,18 @@ if ($search !== '') {
                     WHERE class_teachers.class_id = classes.id
                       AND class_teachers.deleted_at IS NULL
                       AND assigned_teachers.deleted_at IS NULL
-                ) + CASE WHEN classes.teacher_id IS NOT NULL AND teachers.deleted_at IS NULL THEN 1 ELSE 0 END AS teacher_count,
+                ) + CASE
+                    WHEN classes.teacher_id IS NOT NULL
+                     AND teachers.deleted_at IS NULL
+                     AND NOT EXISTS (
+                        SELECT 1
+                        FROM class_teachers AS duplicate_legacy_teacher
+                        WHERE duplicate_legacy_teacher.class_id = classes.id
+                          AND duplicate_legacy_teacher.teacher_id = classes.teacher_id
+                          AND duplicate_legacy_teacher.deleted_at IS NULL
+                     )
+                    THEN 1 ELSE 0
+                END AS teacher_count,
                 (
                     SELECT COUNT(DISTINCT learners.id)
                     FROM learners
@@ -298,6 +310,8 @@ if ($search !== '') {
                 FROM class_teachers
                 INNER JOIN teachers AS assigned_teachers ON assigned_teachers.id = class_teachers.teacher_id
                 WHERE class_teachers.class_id = classes.id
+                  AND class_teachers.deleted_at IS NULL
+                  AND assigned_teachers.deleted_at IS NULL
                   AND assigned_teachers.full_name LIKE :assigned_teacher_search
             )
             OR classes.status LIKE :status_search
@@ -337,7 +351,18 @@ if ($search !== '') {
                     WHERE class_teachers.class_id = classes.id
                       AND class_teachers.deleted_at IS NULL
                       AND assigned_teachers.deleted_at IS NULL
-                ) + CASE WHEN classes.teacher_id IS NOT NULL AND teachers.deleted_at IS NULL THEN 1 ELSE 0 END AS teacher_count,
+                ) + CASE
+                    WHEN classes.teacher_id IS NOT NULL
+                     AND teachers.deleted_at IS NULL
+                     AND NOT EXISTS (
+                        SELECT 1
+                        FROM class_teachers AS duplicate_legacy_teacher
+                        WHERE duplicate_legacy_teacher.class_id = classes.id
+                          AND duplicate_legacy_teacher.teacher_id = classes.teacher_id
+                          AND duplicate_legacy_teacher.deleted_at IS NULL
+                     )
+                    THEN 1 ELSE 0
+                END AS teacher_count,
                 (
                     SELECT COUNT(DISTINCT learners.id)
                     FROM learners
@@ -395,7 +420,7 @@ $successMessages = [
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=class-reorder-controls" rel="stylesheet">
+  <link href="css/style.css?v=class-status-colors" rel="stylesheet">
   <?php echo kiwiSystemThemeStyle(); ?>
 </head>
 <body class="dashboard-page">
@@ -483,7 +508,7 @@ $successMessages = [
                           <i class="fa-solid fa-chalkboard-user"></i>
                         </div>
                       <?php endif; ?>
-                      <span class="class-status-badge <?php echo $classRow['status'] === 'Active' ? 'is-active' : 'is-inactive'; ?>">
+                      <span class="class-status-badge <?php echo e(kiwiClassStatusCssClass((string) $classRow['status'])); ?>">
                         <?php echo e($classRow['status']); ?>
                       </span>
                     </div>
@@ -582,8 +607,9 @@ $successMessages = [
             <div class="mb-3">
               <label class="form-label" for="status">Status</label>
               <select class="form-select" id="status" name="status">
-                <option value="Active" <?php echo $formClass['status'] === 'Active' ? 'selected' : ''; ?>>Active</option>
-                <option value="Inactive" <?php echo $formClass['status'] === 'Inactive' ? 'selected' : ''; ?>>Inactive</option>
+                <?php foreach (kiwiClassStatusOptions() as $statusOption): ?>
+                  <option value="<?php echo e($statusOption); ?>" <?php echo $formClass['status'] === $statusOption ? 'selected' : ''; ?>><?php echo e($statusOption); ?></option>
+                <?php endforeach; ?>
               </select>
             </div>
             <div class="mb-3">

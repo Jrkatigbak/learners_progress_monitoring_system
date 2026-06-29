@@ -1,6 +1,7 @@
 <?php
 
 require_once __DIR__ . '/includes/admin_guard.php';
+require_once __DIR__ . '/includes/class_status.php';
 
 if (!kiwiCan($pdo, 'dashboard.view')) {
     $fallbackPaths = [
@@ -63,7 +64,7 @@ $classRows = $pdo->query(
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css" rel="stylesheet">
+  <link href="css/style.css?v=class-status-colors" rel="stylesheet">
   <?php echo kiwiSystemThemeStyle(); ?>
 </head>
 <body class="dashboard-page">
@@ -203,7 +204,7 @@ $classRows = $pdo->query(
                           <strong><?php echo htmlspecialchars($classRow['class_name'], ENT_QUOTES, 'UTF-8'); ?></strong><br>
                           <span class="text-secondary small">Created <?php echo htmlspecialchars(date('M d, Y', strtotime((string) $classRow['created_at'])), ENT_QUOTES, 'UTF-8'); ?></span>
                         </td>
-                        <td><span class="badge <?php echo $classRow['status'] === 'Active' ? 'text-bg-success' : 'text-bg-secondary'; ?>"><?php echo htmlspecialchars($classRow['status'], ENT_QUOTES, 'UTF-8'); ?></span></td>
+                        <td><span class="badge <?php echo htmlspecialchars(kiwiClassStatusBootstrapClass((string) $classRow['status']), ENT_QUOTES, 'UTF-8'); ?>"><?php echo htmlspecialchars($classRow['status'], ENT_QUOTES, 'UTF-8'); ?></span></td>
                         <td><strong><?php echo (int) $classRow['pending_count']; ?></strong></td>
                         <td><strong><?php echo (int) $classRow['enrolled_count']; ?></strong></td>
                         <td>

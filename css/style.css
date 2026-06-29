@@ -1843,8 +1843,17 @@ body {
   background: #36c46f;
 }
 
-.class-status-badge.is-inactive {
-  background: #7f8d9c;
+.class-status-badge.is-pending {
+  background: #f7c84b;
+  color: #252019;
+}
+
+.class-status-badge.is-ongoing {
+  background: #2f80ed;
+}
+
+.class-status-badge.is-cancelled {
+  background: #dc3545;
 }
 
 .class-card-body {

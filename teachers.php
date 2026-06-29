@@ -172,7 +172,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
              FROM (
                 SELECT id AS class_id FROM classes WHERE teacher_id = :legacy_teacher_id AND deleted_at IS NULL
                 UNION
-                SELECT class_id FROM class_teachers WHERE teacher_id = :assigned_teacher_id AND deleted_at IS NULL
+                SELECT active_classes.id AS class_id
+                FROM class_teachers
+                INNER JOIN classes AS active_classes
+                  ON active_classes.id = class_teachers.class_id
+                 AND active_classes.deleted_at IS NULL
+                WHERE class_teachers.teacher_id = :assigned_teacher_id
+                  AND class_teachers.deleted_at IS NULL
              ) AS assigned_classes'
         );
         $classCountStatement->execute([
@@ -359,7 +365,12 @@ if ($search !== '') {
                     FROM (
                         SELECT id AS class_id, teacher_id FROM classes WHERE teacher_id IS NOT NULL AND deleted_at IS NULL
                         UNION
-                        SELECT class_id, teacher_id FROM class_teachers WHERE deleted_at IS NULL
+                        SELECT active_classes.id AS class_id, class_teachers.teacher_id
+                        FROM class_teachers
+                        INNER JOIN classes AS active_classes
+                          ON active_classes.id = class_teachers.class_id
+                         AND active_classes.deleted_at IS NULL
+                        WHERE class_teachers.deleted_at IS NULL
                     ) AS assigned_classes
                     WHERE assigned_classes.teacher_id = teachers.id
                 ) AS class_count
@@ -389,7 +400,12 @@ if ($search !== '') {
                     FROM (
                         SELECT id AS class_id, teacher_id FROM classes WHERE teacher_id IS NOT NULL AND deleted_at IS NULL
                         UNION
-                        SELECT class_id, teacher_id FROM class_teachers WHERE deleted_at IS NULL
+                        SELECT active_classes.id AS class_id, class_teachers.teacher_id
+                        FROM class_teachers
+                        INNER JOIN classes AS active_classes
+                          ON active_classes.id = class_teachers.class_id
+                         AND active_classes.deleted_at IS NULL
+                        WHERE class_teachers.deleted_at IS NULL
                     ) AS assigned_classes
                     WHERE assigned_classes.teacher_id = teachers.id
                 ) AS class_count

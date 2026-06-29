@@ -35,9 +35,6 @@ if (!function_exists('kiwiSidebarActive')) {
     <?php if (kiwiCan($pdo, 'settings.manage')): ?>
       <a<?php echo kiwiSidebarActive('settings', $activeSidebarItem); ?> href="settings.php"><i class="fa-solid fa-sliders"></i> System Settings</a>
     <?php endif; ?>
-    <?php if (kiwiCan($pdo, 'grades.manage')): ?>
-      <a<?php echo kiwiSidebarActive('grades', $activeSidebarItem); ?> href="grades.php"><i class="fa-solid fa-star"></i> Grades</a>
-    <?php endif; ?>
   </nav>
   <div class="sidebar-footer">
     <p class="mb-1">Logged in as</p>
