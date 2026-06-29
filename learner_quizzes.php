@@ -280,7 +280,7 @@ $successMessages = [
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css" rel="stylesheet">
+  <link href="css/style.css?v=20260629-roles-permissions" rel="stylesheet">
 </head>
 <body class="dashboard-page">
   <div class="app-layout">
@@ -466,6 +466,6 @@ $successMessages = [
       renderTimer();
     })();
   </script>
-  <script src="js/app.js"></script>
+  <script src="js/app.js?v=20260629-roles-permissions"></script>
 </body>
 </html>

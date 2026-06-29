@@ -733,6 +733,235 @@ body {
   color: var(--green);
 }
 
+.role-permission-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.95fr) minmax(0, 2fr);
+  gap: 28px;
+  align-items: stretch;
+}
+
+.role-editor-card,
+.role-list-card,
+.role-permission-assign-card {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow: 0 18px 42px var(--shadow);
+}
+
+.role-editor-card {
+  min-height: 620px;
+  padding: 34px;
+}
+
+.role-list-card {
+  padding: 34px;
+}
+
+.role-panel-heading {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 28px;
+}
+
+.role-panel-heading h2 {
+  margin: 0;
+  color: var(--ink);
+  font-size: clamp(1.45rem, 2.4vw, 2.05rem);
+  font-weight: 900;
+  letter-spacing: 0;
+}
+
+.role-heading-icon {
+  width: 64px;
+  height: 64px;
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border-radius: 12px;
+  background: rgba(245, 130, 32, 0.12);
+  color: var(--green);
+  font-size: 1.7rem;
+}
+
+.role-editor-form {
+  display: grid;
+  gap: 16px;
+}
+
+.role-editor-form .form-control {
+  min-height: 60px;
+  border-radius: 10px;
+}
+
+.role-save-button,
+.role-clear-button,
+.role-permission-save-button {
+  min-height: 62px;
+  border-radius: 10px;
+  font-weight: 900;
+}
+
+.role-save-button,
+.role-permission-save-button {
+  background: var(--green);
+  border-color: var(--green);
+}
+
+.role-clear-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--green);
+  border-color: rgba(76, 143, 23, 0.22);
+}
+
+.role-search-input {
+  min-height: 64px;
+  margin-bottom: 22px;
+  border-radius: 10px;
+}
+
+.role-list-table-wrap {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.role-list-table {
+  margin: 0;
+}
+
+.role-list-table thead th {
+  padding: 24px 26px;
+  border-bottom: 0;
+  background: rgba(231, 207, 137, 0.35);
+  color: #6c4a28;
+  font-size: 1rem;
+  font-weight: 900;
+}
+
+.role-list-table tbody tr:nth-child(even) {
+  background: rgba(218, 74, 58, 0.06);
+}
+
+.role-list-table tbody td {
+  padding: 26px;
+  border-bottom: 0;
+}
+
+.role-list-table tbody strong,
+.role-list-table tbody span {
+  display: block;
+}
+
+.role-list-table tbody strong {
+  color: var(--green);
+  font-size: 1.1rem;
+  font-weight: 900;
+}
+
+.role-list-table tbody span {
+  color: var(--muted);
+  font-weight: 650;
+}
+
+.role-list-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.role-action-button {
+  width: 48px;
+  height: 48px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid rgba(76, 143, 23, 0.18);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--green);
+  box-shadow: 0 10px 22px rgba(19, 80, 37, 0.08);
+  transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+}
+
+.role-action-button:hover {
+  transform: translateY(-2px);
+  border-color: rgba(76, 143, 23, 0.38);
+  background: rgba(76, 143, 23, 0.08);
+  color: var(--green);
+}
+
+.role-action-button.is-danger {
+  border-color: rgba(220, 53, 69, 0.14);
+  color: #dc3545;
+}
+
+.role-action-button:disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.role-list-count {
+  padding: 18px 0 18px;
+  color: var(--muted);
+  font-weight: 850;
+}
+
+.role-permission-assign-card {
+  margin-top: 28px;
+  padding: 34px;
+}
+
+.role-permission-assign-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.role-permission-save-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 22px;
+}
+
+.role-permission-scroll {
+  max-height: 430px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.role-assign-table {
+  margin: 0;
+}
+
+.role-assign-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  border-bottom: 1px solid rgba(108, 74, 40, 0.32);
+  background: rgba(231, 207, 137, 0.35);
+  color: #6c4a28;
+  font-weight: 900;
+}
+
+.role-assign-table tbody tr:nth-child(even) {
+  background: var(--surface-alt);
+}
+
+@media (max-width: 1199px) {
+  .role-permission-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .role-editor-card {
+    min-height: auto;
+  }
+}
+
 .table > :not(caption) > * > * {
   padding: 16px 12px;
 }

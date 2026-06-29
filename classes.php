@@ -257,24 +257,25 @@ if ($search !== '') {
                     classes.teacher
                 ) AS display_teacher
                 ,
-                (
-                    SELECT COUNT(DISTINCT assigned_teachers.id)
-                    FROM class_teachers
-                    INNER JOIN teachers AS assigned_teachers ON assigned_teachers.id = class_teachers.teacher_id
-                    WHERE class_teachers.class_id = classes.id
-                      AND class_teachers.deleted_at IS NULL
-                      AND assigned_teachers.deleted_at IS NULL
-                ) + CASE
-                    WHEN classes.teacher_id IS NOT NULL
-                     AND teachers.deleted_at IS NULL
-                     AND NOT EXISTS (
+                CASE
+                    WHEN EXISTS (
                         SELECT 1
-                        FROM class_teachers AS duplicate_legacy_teacher
-                        WHERE duplicate_legacy_teacher.class_id = classes.id
-                          AND duplicate_legacy_teacher.teacher_id = classes.teacher_id
-                          AND duplicate_legacy_teacher.deleted_at IS NULL
-                     )
-                    THEN 1 ELSE 0
+                        FROM class_teachers
+                        INNER JOIN teachers AS assigned_teachers ON assigned_teachers.id = class_teachers.teacher_id
+                        WHERE class_teachers.class_id = classes.id
+                          AND class_teachers.deleted_at IS NULL
+                          AND assigned_teachers.deleted_at IS NULL
+                    )
+                    THEN (
+                        SELECT COUNT(DISTINCT assigned_teachers.id)
+                        FROM class_teachers
+                        INNER JOIN teachers AS assigned_teachers ON assigned_teachers.id = class_teachers.teacher_id
+                        WHERE class_teachers.class_id = classes.id
+                          AND class_teachers.deleted_at IS NULL
+                          AND assigned_teachers.deleted_at IS NULL
+                    )
+                    WHEN classes.teacher_id IS NOT NULL AND teachers.deleted_at IS NULL THEN 1
+                    ELSE 0
                 END AS teacher_count,
                 (
                     SELECT COUNT(DISTINCT learners.id)
@@ -344,24 +345,25 @@ if ($search !== '') {
                     classes.teacher
                 ) AS display_teacher
                 ,
-                (
-                    SELECT COUNT(DISTINCT assigned_teachers.id)
-                    FROM class_teachers
-                    INNER JOIN teachers AS assigned_teachers ON assigned_teachers.id = class_teachers.teacher_id
-                    WHERE class_teachers.class_id = classes.id
-                      AND class_teachers.deleted_at IS NULL
-                      AND assigned_teachers.deleted_at IS NULL
-                ) + CASE
-                    WHEN classes.teacher_id IS NOT NULL
-                     AND teachers.deleted_at IS NULL
-                     AND NOT EXISTS (
+                CASE
+                    WHEN EXISTS (
                         SELECT 1
-                        FROM class_teachers AS duplicate_legacy_teacher
-                        WHERE duplicate_legacy_teacher.class_id = classes.id
-                          AND duplicate_legacy_teacher.teacher_id = classes.teacher_id
-                          AND duplicate_legacy_teacher.deleted_at IS NULL
-                     )
-                    THEN 1 ELSE 0
+                        FROM class_teachers
+                        INNER JOIN teachers AS assigned_teachers ON assigned_teachers.id = class_teachers.teacher_id
+                        WHERE class_teachers.class_id = classes.id
+                          AND class_teachers.deleted_at IS NULL
+                          AND assigned_teachers.deleted_at IS NULL
+                    )
+                    THEN (
+                        SELECT COUNT(DISTINCT assigned_teachers.id)
+                        FROM class_teachers
+                        INNER JOIN teachers AS assigned_teachers ON assigned_teachers.id = class_teachers.teacher_id
+                        WHERE class_teachers.class_id = classes.id
+                          AND class_teachers.deleted_at IS NULL
+                          AND assigned_teachers.deleted_at IS NULL
+                    )
+                    WHEN classes.teacher_id IS NOT NULL AND teachers.deleted_at IS NULL THEN 1
+                    ELSE 0
                 END AS teacher_count,
                 (
                     SELECT COUNT(DISTINCT learners.id)
@@ -420,7 +422,7 @@ $successMessages = [
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=class-status-colors" rel="stylesheet">
+  <link href="css/style.css?v=20260629-roles-permissions" rel="stylesheet">
   <?php echo kiwiSystemThemeStyle(); ?>
 </head>
 <body class="dashboard-page">
@@ -638,6 +640,6 @@ $successMessages = [
       });
     </script>
   <?php endif; ?>
-  <script src="js/app.js"></script>
+  <script src="js/app.js?v=20260629-roles-permissions"></script>
 </body>
 </html>

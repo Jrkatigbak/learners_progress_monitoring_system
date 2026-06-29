@@ -345,6 +345,17 @@ $(function () {
     $('#edit_topic_banner_image').val('');
   });
 
+  $(document).on('click', '.edit-task-button', function () {
+    var $selectedTask = $('#task_id_filter option:selected');
+
+    // Edit whichever grade item is currently selected in the Grades filter.
+    $('#edit_task_id').val($selectedTask.val() || '');
+    $('#edit_task_topic_id').val($selectedTask.attr('data-topic-id') || '');
+    $('#edit_task_title').val($selectedTask.attr('data-title') || '');
+    $('#edit_task_date').val($selectedTask.attr('data-task-date') || '');
+    $('#edit_task_description').val($selectedTask.attr('data-description') || '');
+  });
+
   $(document).on('click', '.edit-quiz-button', function () {
     var $button = $(this);
 

@@ -40,6 +40,23 @@ function adminSideRoleRows(PDO $pdo): array
     )->fetchAll();
 }
 
+function adminSideRoleUserCounts(PDO $pdo): array
+{
+    $statement = $pdo->query(
+        'SELECT role, COUNT(*) AS total
+         FROM users
+         WHERE deleted_at IS NULL
+         GROUP BY role'
+    );
+    $counts = [];
+
+    foreach ($statement->fetchAll() as $row) {
+        $counts[(string) $row['role']] = (int) $row['total'];
+    }
+
+    return $counts;
+}
+
 $formRole = [
     'id' => 0,
     'role_name' => '',
@@ -74,9 +91,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($action === 'save_role') {
         $roleId = (int) ($_POST['role_id'] ?? 0);
         $roleName = trim((string) ($_POST['role_name'] ?? ''));
-        $roleKey = slugifyRoleKey((string) ($_POST['role_key'] ?? $roleName));
+        $postedRoleKey = trim((string) ($_POST['role_key'] ?? ''));
+        $roleKey = slugifyRoleKey($postedRoleKey !== '' ? $postedRoleKey : $roleName);
         $description = trim((string) ($_POST['description'] ?? ''));
-        $selectedPermissions = array_values(array_intersect(array_keys($permissionDefinitions), (array) ($_POST['permissions'] ?? [])));
 
         if ($roleName === '') {
             $errors[] = 'Role name is required.';
@@ -131,7 +148,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $roleId = (int) $pdo->lastInsertId();
             }
 
-            // Replace the permission set so each role has one clear access profile.
+            header('Location: roles_permissions.php?success=role_saved&edit_role=' . $roleId);
+            exit;
+        }
+    }
+
+    if ($action === 'save_permissions') {
+        $roleId = (int) ($_POST['role_id'] ?? 0);
+        $selectedPermissions = array_values(array_intersect(array_keys($permissionDefinitions), (array) ($_POST['permissions'] ?? [])));
+        $roleStatement = $pdo->prepare('SELECT * FROM roles WHERE id = :id AND role_key NOT IN ("teacher", "learner") AND deleted_at IS NULL LIMIT 1');
+        $roleStatement->execute(['id' => $roleId]);
+        $role = $roleStatement->fetch() ?: null;
+
+        if (!$role) {
+            $errors[] = 'Select an active role before saving permissions.';
+        }
+
+        if (!$errors) {
+            // Replace only the selected role permission set from the dedicated permission matrix.
             $permissionDelete = $pdo->prepare('DELETE FROM role_permissions WHERE role_id = :role_id');
             $permissionDelete->execute(['role_id' => $roleId]);
             $permissionInsert = $pdo->prepare('INSERT INTO role_permissions (role_id, permission_key) VALUES (:role_id, :permission_key)');
@@ -143,7 +177,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 ]);
             }
 
-            header('Location: roles_permissions.php?success=role_saved');
+            header('Location: roles_permissions.php?success=permissions_saved&edit_role=' . $roleId . '#assign-permissions');
             exit;
         }
     }
@@ -175,6 +209,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 $roles = adminSideRoleRows($pdo);
+$roleUserCounts = adminSideRoleUserCounts($pdo);
 $rolePermissionRows = $pdo->query(
     'SELECT roles.role_key, role_permissions.permission_key
      FROM roles
@@ -188,9 +223,13 @@ foreach ($rolePermissionRows as $row) {
 }
 
 $successMessages = [
-    'role_saved' => 'Role and permissions saved successfully.',
+    'role_saved' => 'Role saved successfully.',
+    'permissions_saved' => 'Permissions saved successfully.',
     'role_deleted' => 'Role deleted successfully.',
 ];
+
+$selectedPermissionRole = !empty($formRole['id']) ? $formRole : ($roles[0] ?? null);
+$selectedRolePermissions = $selectedPermissionRole ? ($rolePermissions[(string) $selectedPermissionRole['role_key']] ?? []) : [];
 ?>
 <!doctype html>
 <html lang="en">
@@ -205,7 +244,7 @@ $successMessages = [
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css" rel="stylesheet">
+  <link href="css/style.css?v=20260629-roles-permissions" rel="stylesheet">
   <?php echo kiwiSystemThemeStyle(); ?>
 </head>
 <body class="dashboard-page">
@@ -249,107 +288,71 @@ $successMessages = [
           </div>
         <?php endif; ?>
 
-        <div class="row g-4">
-          <div class="col-xl-4">
-            <div class="panel-card">
-              <span class="section-kicker"><?php echo !empty($formRole['id']) ? 'Edit Role' : 'Add Role'; ?></span>
-              <h2 class="h5 mb-4">Role details</h2>
-              <form method="post" class="module-form">
+        <div class="role-permission-layout">
+          <div class="role-editor-card">
+            <div class="role-panel-heading">
+              <span class="role-heading-icon"><i class="fa-solid fa-id-badge"></i></span>
+              <div>
+                <span class="section-kicker">Role</span>
+                <h2>Create or Update Role</h2>
+              </div>
+            </div>
+            <form method="post" class="module-form role-editor-form">
                 <input type="hidden" name="action" value="save_role">
                 <input type="hidden" name="role_id" value="<?php echo (int) ($formRole['id'] ?? 0); ?>">
                 <div class="mb-3">
-                  <label class="form-label" for="role_name">Role name</label>
-                  <input type="text" class="form-control" id="role_name" name="role_name" value="<?php echo e((string) ($formRole['role_name'] ?? '')); ?>" required>
+                  <label class="form-label" for="role_name">Name <span class="text-danger">*</span></label>
+                  <input type="text" class="form-control form-control-lg" id="role_name" name="role_name" value="<?php echo e((string) ($formRole['role_name'] ?? '')); ?>" placeholder="Example: Accountant" required>
                 </div>
-                <div class="mb-3">
-                  <label class="form-label" for="role_key">Role key</label>
-                  <input type="text" class="form-control" id="role_key" name="role_key" value="<?php echo e((string) ($formRole['role_key'] ?? '')); ?>" <?php echo !empty($formRole['is_system']) ? 'readonly' : ''; ?>>
-                  <small class="text-secondary">Used internally for access checks.</small>
-                </div>
-                <div class="mb-3">
-                  <label class="form-label" for="description">Description</label>
-                  <textarea class="form-control" id="description" name="description" rows="3"><?php echo e((string) ($formRole['description'] ?? '')); ?></textarea>
-                </div>
-                <div class="table-responsive mb-4">
-                  <table class="table align-middle permission-matrix-table">
-                    <thead>
-                      <tr>
-                        <th>Module</th>
-                        <th class="text-center">View</th>
-                        <th class="text-center">Add</th>
-                        <th class="text-center">Edit</th>
-                        <th class="text-center">Delete</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <?php foreach ($permissionRows as $row): ?>
-                        <tr>
-                          <td><strong><?php echo e($row['label']); ?></strong></td>
-                          <?php foreach (['view', 'add', 'edit', 'delete'] as $actionName): ?>
-                            <td class="text-center">
-                              <?php if (!empty($row[$actionName])): ?>
-                                <input class="permission-matrix-check" type="checkbox" name="permissions[]" value="<?php echo e($row[$actionName]); ?>" <?php echo in_array($row[$actionName], $formRolePermissions, true) ? 'checked' : ''; ?> aria-label="<?php echo e($row['label'] . ' ' . $actionName); ?>">
-                              <?php else: ?>
-                                <span class="text-secondary">-</span>
-                              <?php endif; ?>
-                            </td>
-                          <?php endforeach; ?>
-                        </tr>
-                      <?php endforeach; ?>
-                    </tbody>
-                  </table>
-                </div>
-                <div class="d-flex flex-wrap gap-2">
-                  <button type="submit" class="btn btn-primary"><i class="fa-solid fa-floppy-disk me-2"></i>Save Role</button>
-                  <?php if (!empty($formRole['id'])): ?><a href="roles_permissions.php" class="btn btn-outline-secondary">Cancel</a><?php endif; ?>
-                </div>
-              </form>
-            </div>
+                <input type="hidden" id="role_key" name="role_key" value="<?php echo e((string) ($formRole['role_key'] ?? '')); ?>">
+                <textarea class="d-none" id="description" name="description"><?php echo e((string) ($formRole['description'] ?? '')); ?></textarea>
+                <button type="submit" class="btn btn-success btn-lg w-100 role-save-button">
+                  <i class="fa-regular fa-circle-check me-2"></i>Save Role
+                </button>
+                <a href="roles_permissions.php" class="btn btn-outline-success btn-lg w-100 role-clear-button">Clear Form</a>
+            </form>
           </div>
 
-          <div class="col-xl-8">
-            <div class="panel-card">
-              <span class="section-kicker">Role Library</span>
-              <h2 class="h5 mb-4">Saved roles</h2>
-              <div class="table-responsive">
-                <table class="table align-middle permission-summary-table">
+          <div class="role-list-card">
+            <div class="role-panel-heading">
+              <span class="role-heading-icon"><i class="fa-solid fa-list-check"></i></span>
+              <div>
+                <span class="section-kicker">Role List</span>
+                <h2>Available System Roles</h2>
+              </div>
+            </div>
+            <input type="search" class="form-control form-control-lg role-search-input" id="roleSearchInput" placeholder="Search roles...">
+            <div class="role-list-table-wrap">
+              <table class="table align-middle role-list-table">
                   <thead>
                     <tr>
                       <th>Role</th>
-                      <?php foreach ($permissionRows as $row): ?>
-                        <th class="text-center"><?php echo e($row['label']); ?></th>
-                      <?php endforeach; ?>
                       <th class="text-end">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     <?php foreach ($roles as $role): ?>
-                      <?php $savedPermissions = $rolePermissions[(string) $role['role_key']] ?? []; ?>
-                      <tr>
+                      <?php
+                        $roleKey = (string) $role['role_key'];
+                        $assignedUsers = $roleUserCounts[$roleKey] ?? 0;
+                      ?>
+                      <tr class="role-list-row" data-search="<?php echo e(strtolower((string) $role['role_name'] . ' ' . $roleKey)); ?>">
                         <td>
-                          <strong><?php echo e((string) $role['role_name']); ?></strong><br>
-                          <span class="text-secondary small"><?php echo e((string) ($role['description'] ?: $role['role_key'])); ?></span>
+                          <strong><?php echo e((string) $role['role_name']); ?></strong>
+                          <span><?php echo $assignedUsers > 0 ? $assignedUsers . ' assigned user(s)' : 'No assigned users'; ?></span>
                         </td>
-                        <?php foreach ($permissionRows as $row): ?>
-                          <td>
-                            <div class="permission-summary-checks">
-                              <?php foreach (['view' => 'V', 'add' => 'A', 'edit' => 'E', 'delete' => 'D'] as $actionName => $label): ?>
-                                <?php if (!empty($row[$actionName])): ?>
-                                  <span class="<?php echo in_array($row[$actionName], $savedPermissions, true) ? 'is-checked' : ''; ?>"><?php echo e($label); ?></span>
-                                <?php endif; ?>
-                              <?php endforeach; ?>
-                            </div>
-                          </td>
-                        <?php endforeach; ?>
                         <td class="text-end">
-                          <div class="d-inline-flex gap-2">
-                            <a class="learner-icon-button" href="roles_permissions.php?edit_role=<?php echo (int) $role['id']; ?>" aria-label="Edit role"><i class="fa-solid fa-pen"></i></a>
+                          <div class="role-list-actions">
+                            <a class="role-action-button" href="roles_permissions.php?edit_role=<?php echo (int) $role['id']; ?>#assign-permissions" aria-label="Assign permissions" title="Assign permissions"><i class="fa-solid fa-tags"></i></a>
+                            <a class="role-action-button" href="roles_permissions.php?edit_role=<?php echo (int) $role['id']; ?>" aria-label="Edit role" title="Edit role"><i class="fa-solid fa-pen"></i></a>
                             <?php if ((int) $role['is_system'] !== 1): ?>
                               <form method="post" onsubmit="return confirm('Delete this role?');">
                                 <input type="hidden" name="action" value="delete_role">
                                 <input type="hidden" name="role_id" value="<?php echo (int) $role['id']; ?>">
-                                <button type="submit" class="learner-icon-button is-danger" aria-label="Delete role"><i class="fa-solid fa-trash"></i></button>
+                                <button type="submit" class="role-action-button is-danger" aria-label="Delete role" title="Delete role"><i class="fa-solid fa-xmark"></i></button>
                               </form>
+                            <?php else: ?>
+                              <button type="button" class="role-action-button is-danger" disabled aria-label="System role cannot be deleted" title="System role cannot be deleted"><i class="fa-solid fa-xmark"></i></button>
                             <?php endif; ?>
                           </div>
                         </td>
@@ -357,9 +360,69 @@ $successMessages = [
                     <?php endforeach; ?>
                   </tbody>
                 </table>
+                <p class="role-list-count mb-0">Showing 1 to <?php echo count($roles); ?> of <?php echo count($roles); ?> entries</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="role-permission-assign-card" id="assign-permissions">
+          <div class="role-permission-assign-head">
+            <div class="role-panel-heading">
+              <span class="role-heading-icon"><i class="fa-solid fa-shield-halved"></i></span>
+              <div>
+                <span class="section-kicker">Assign Permission</span>
+                <h2>Assign Permission<?php echo $selectedPermissionRole ? ' (' . e((string) $selectedPermissionRole['role_name']) . ')' : ''; ?></h2>
               </div>
             </div>
           </div>
+
+          <?php if (!$selectedPermissionRole): ?>
+            <div class="empty-state">
+              <i class="fa-solid fa-shield-halved"></i>
+              <p>Create a role before assigning permissions.</p>
+            </div>
+          <?php else: ?>
+            <form method="post">
+              <input type="hidden" name="action" value="save_permissions">
+              <input type="hidden" name="role_id" value="<?php echo (int) $selectedPermissionRole['id']; ?>">
+              <div class="role-permission-scroll table-responsive">
+                <table class="table align-middle permission-matrix-table role-assign-table">
+                  <thead>
+                    <tr>
+                      <th>Module</th>
+                      <th>Feature</th>
+                      <th class="text-center">View</th>
+                      <th class="text-center">Add</th>
+                      <th class="text-center">Edit</th>
+                      <th class="text-center">Delete</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <?php foreach ($permissionRows as $moduleKey => $row): ?>
+                      <tr>
+                        <td><strong><?php echo e(ucfirst($moduleKey === 'users' ? 'Administration' : $row['label'])); ?></strong></td>
+                        <td><?php echo e($row['label']); ?></td>
+                        <?php foreach (['view', 'add', 'edit', 'delete'] as $actionName): ?>
+                          <td class="text-center">
+                            <?php if (!empty($row[$actionName])): ?>
+                              <input class="permission-matrix-check" type="checkbox" name="permissions[]" value="<?php echo e($row[$actionName]); ?>" <?php echo in_array($row[$actionName], $selectedRolePermissions, true) ? 'checked' : ''; ?> aria-label="<?php echo e($row['label'] . ' ' . $actionName); ?>">
+                            <?php else: ?>
+                              <span class="text-secondary">-</span>
+                            <?php endif; ?>
+                          </td>
+                        <?php endforeach; ?>
+                      </tr>
+                    <?php endforeach; ?>
+                  </tbody>
+                </table>
+              </div>
+              <div class="role-permission-save-row">
+                <button type="submit" class="btn btn-success btn-lg role-permission-save-button">
+                  <i class="fa-regular fa-square-check me-2"></i>Save Permissions
+                </button>
+              </div>
+            </form>
+          <?php endif; ?>
         </div>
       </section>
     </main>
@@ -367,6 +430,23 @@ $successMessages = [
 
   <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-  <script src="js/app.js"></script>
+  <script>
+    (function () {
+      var roleSearch = document.getElementById('roleSearchInput');
+
+      if (!roleSearch) {
+        return;
+      }
+
+      roleSearch.addEventListener('input', function () {
+        var query = roleSearch.value.trim().toLowerCase();
+
+        document.querySelectorAll('.role-list-row').forEach(function (row) {
+          row.classList.toggle('d-none', query !== '' && !row.dataset.search.includes(query));
+        });
+      });
+    })();
+  </script>
+  <script src="js/app.js?v=20260629-roles-permissions"></script>
 </body>
 </html>

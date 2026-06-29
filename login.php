@@ -34,7 +34,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css" rel="stylesheet">
+  <link href="css/style.css?v=20260629-roles-permissions" rel="stylesheet">
 </head>
 <body class="auth-page">
   <button class="theme-toggle auth-theme-toggle" id="themeToggle" type="button" aria-label="Switch to dark mode" aria-pressed="false">
@@ -68,15 +68,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
               <label class="form-label" for="email">Email address</label>
               <div class="input-group input-group-lg">
                 <span class="input-group-text"><i class="fa-regular fa-envelope"></i></span>
-                <!-- Pre-fill the seeded admin account for quick local testing. -->
-                <input type="email" class="form-control" id="email" name="email" value="admin@learnersprogress.local" required autocomplete="email">
+                <!-- Keep the login form empty so every user manually enters their own email. -->
+                <input type="email" class="form-control" id="email" name="email" required autocomplete="email">
               </div>
             </div>
             <div class="mb-4">
               <label class="form-label" for="password">Password</label>
               <div class="input-group input-group-lg">
                 <span class="input-group-text"><i class="fa-solid fa-lock"></i></span>
-                <input type="password" class="form-control" id="password" name="password" value="Admin@12345" required autocomplete="current-password">
+                <!-- Keep the password blank by default instead of exposing seeded credentials. -->
+                <input type="password" class="form-control" id="password" name="password" required autocomplete="current-password">
               </div>
             </div>
             <button type="submit" class="btn btn-primary btn-lg w-100" id="loginButton">
@@ -91,6 +92,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
   <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-  <script src="js/app.js"></script>
+  <script src="js/app.js?v=20260629-roles-permissions"></script>
 </body>
 </html>

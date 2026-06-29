@@ -1717,6 +1717,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $description = trim($_POST['description'] ?? '');
         $taskDate = trim($_POST['task_date'] ?? date('Y-m-d'));
         $taskTopicId = (int) ($_POST['task_topic_id'] ?? 0);
+        $returnTool = $_POST['return_tool'] ?? 'tasks';
+        $returnTool = in_array($returnTool, ['tasks', 'grades'], true) ? $returnTool : 'tasks';
 
         if ($title === '') {
             $errors[] = 'Topic title is required.';
@@ -1745,12 +1747,90 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'task_date' => $taskDate,
                 'created_by_user_id' => (int) $currentUser['id'],
             ]);
+            $newTaskId = (int) $pdo->lastInsertId();
+
+            if ($returnTool === 'grades') {
+                header('Location: class_workspace.php?class_id=' . $classId . '&tool=grades&topic_id=' . $taskTopicId . '&task_id=' . $newTaskId . '&success=task_created');
+                exit;
+            }
 
             header('Location: class_workspace.php?class_id=' . $classId . '&tool=tasks&success=task_created');
             exit;
         }
 
-        $tool = 'tasks';
+        $tool = $returnTool;
+    }
+
+    if ($action === 'update_task') {
+        $taskId = (int) ($_POST['task_id'] ?? 0);
+        $title = trim($_POST['task_title'] ?? '');
+        $description = trim($_POST['description'] ?? '');
+        $taskDate = trim($_POST['task_date'] ?? date('Y-m-d'));
+        $taskTopicId = (int) ($_POST['task_topic_id'] ?? 0);
+
+        if ($taskId <= 0) {
+            $errors[] = 'Select a valid grade item.';
+        }
+
+        if ($title === '') {
+            $errors[] = 'Grade title is required.';
+        }
+
+        if ($taskDate === '' || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $taskDate)) {
+            $errors[] = 'Choose a valid grade date.';
+        }
+
+        if ($taskTopicId <= 0 || !classTopicExists($pdo, $classId, $taskTopicId)) {
+            $errors[] = 'Select a valid class topic.';
+        }
+
+        if (!$errors) {
+            $existingTaskStatement = $pdo->prepare('SELECT id FROM class_tasks WHERE id = :id AND class_id = :class_id AND deleted_at IS NULL LIMIT 1');
+            $existingTaskStatement->execute([
+                'id' => $taskId,
+                'class_id' => $classId,
+            ]);
+
+            if (!$existingTaskStatement->fetch()) {
+                $errors[] = 'Select a valid grade item for this class.';
+            }
+        }
+
+        if (!$errors) {
+            // Editing a grade item keeps learner scores while syncing their saved grade title.
+            $taskStatement = $pdo->prepare(
+                'UPDATE class_tasks
+                 SET folder_id = :folder_id,
+                     task_title = :task_title,
+                     description = :description,
+                     task_date = :task_date
+                 WHERE id = :id AND class_id = :class_id AND deleted_at IS NULL'
+            );
+            $taskStatement->execute([
+                'folder_id' => $taskTopicId,
+                'task_title' => $title,
+                'description' => $description !== '' ? $description : null,
+                'task_date' => $taskDate,
+                'id' => $taskId,
+                'class_id' => $classId,
+            ]);
+
+            $gradeTitleStatement = $pdo->prepare(
+                'UPDATE learner_grades
+                 SET grade_title = :grade_title
+                 WHERE task_id = :task_id AND class_id = :class_id AND deleted_at IS NULL'
+            );
+            $gradeTitleStatement->execute([
+                'grade_title' => $title,
+                'task_id' => $taskId,
+                'class_id' => $classId,
+            ]);
+
+            header('Location: class_workspace.php?class_id=' . $classId . '&tool=grades&topic_id=' . $taskTopicId . '&task_id=' . $taskId . '&success=task_updated');
+            exit;
+        }
+
+        $tool = 'grades';
     }
 
     if ($action === 'delete_task') {
@@ -2212,6 +2292,7 @@ $successMessages = [
     'assignment_created' => 'Assignment added successfully.',
     'assignment_deleted' => 'Assignment deleted successfully.',
     'task_created' => 'Grade added successfully.',
+    'task_updated' => 'Grade item updated successfully.',
     'task_deleted' => 'Grade deleted successfully.',
     'grades_saved' => 'Grades saved successfully.',
 ];
@@ -2232,7 +2313,7 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=class-teachers-tab" rel="stylesheet">
+  <link href="css/style.css?v=20260629-roles-permissions" rel="stylesheet">
   <?php echo kiwiSystemThemeStyle(); ?>
 </head>
 <body class="dashboard-page class-workspace-page class-workspace-<?php echo e($tool); ?>">
@@ -2254,9 +2335,6 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
         <a class="<?php echo $tool === 'quizzes' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=quizzes"><i class="fa-solid fa-circle-question"></i> Quizzes</a>
         <a class="<?php echo $tool === 'assignments' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=assignments"><i class="fa-solid fa-file-pen"></i> Assignments</a>
         <a class="<?php echo $tool === 'grades' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=grades"><i class="fa-solid fa-star"></i> Grades</a>
-        <?php if ($isAdmin && kiwiCan($pdo, 'settings.manage')): ?>
-          <a href="settings.php"><i class="fa-solid fa-sliders"></i> System Settings</a>
-        <?php endif; ?>
         <a href="<?php echo $isTeacher ? 'teacher_dashboard.php' : 'classes.php'; ?>"><i class="fa-solid fa-arrow-left"></i> Back to Classes</a>
       </nav>
       <div class="sidebar-footer">
@@ -3029,7 +3107,14 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
                 <span class="section-kicker">Grades</span>
                 <h2 class="h5 mb-0">Manage topic grades</h2>
               </div>
-              <a href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=tasks" class="btn btn-sm btn-outline-primary">Manage Topics</a>
+              <div class="d-flex flex-wrap gap-2">
+                <?php if ($materialFolders): ?>
+                  <button type="button" class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#taskModal">
+                    <i class="fa-solid fa-plus me-2"></i>Add Grade Item
+                  </button>
+                <?php endif; ?>
+                <a href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=tasks" class="btn btn-sm btn-outline-primary">Manage Topics</a>
+              </div>
             </div>
 
             <?php if (!$materialFolders): ?>
@@ -3052,18 +3137,24 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
                       <?php endforeach; ?>
                     </select>
                   </div>
-                  <div class="col-md-5">
+                  <div class="col-md-4">
                     <label class="form-label" for="task_id_filter">Grade item</label>
                     <select class="form-select" id="task_id_filter" name="task_id" <?php echo !$gradeTasks ? 'disabled' : ''; ?>>
                       <?php if (!$gradeTasks): ?>
                         <option value="">No grade items in this topic</option>
                       <?php endif; ?>
                       <?php foreach ($gradeTasks as $taskRow): ?>
-                        <option value="<?php echo (int) $taskRow['id']; ?>" <?php echo $selectedTask && (int) $selectedTask['id'] === (int) $taskRow['id'] ? 'selected' : ''; ?>>
+                        <option value="<?php echo (int) $taskRow['id']; ?>" data-topic-id="<?php echo (int) ($taskRow['folder_id'] ?? 0); ?>" data-title="<?php echo e((string) $taskRow['task_title']); ?>" data-description="<?php echo e((string) ($taskRow['description'] ?? '')); ?>" data-task-date="<?php echo e((string) $taskRow['task_date']); ?>" <?php echo $selectedTask && (int) $selectedTask['id'] === (int) $taskRow['id'] ? 'selected' : ''; ?>>
                           <?php echo e($taskRow['task_title']); ?>
                         </option>
                       <?php endforeach; ?>
                     </select>
+                  </div>
+                  <div class="col-md-1">
+                    <label class="form-label d-none d-md-block">&nbsp;</label>
+                    <button type="button" class="learner-icon-button w-100 edit-task-button" data-bs-toggle="modal" data-bs-target="#editTaskModal" <?php echo !$selectedTask ? 'disabled' : ''; ?> aria-label="Edit selected grade item">
+                      <i class="fa-solid fa-pen"></i>
+                    </button>
                   </div>
                   <div class="col-md-2">
                     <button type="submit" class="btn btn-primary w-100" <?php echo !$gradeTasks ? 'disabled' : ''; ?>>Open</button>
@@ -3074,7 +3165,7 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
               <?php if (!$gradeTasks): ?>
                 <div class="empty-state">
                   <i class="fa-solid fa-star-half-stroke"></i>
-                  <p>No grade items are saved under this topic yet. Go to Manage Topics and add a grade for this topic.</p>
+                  <p>No grade items are saved under this topic yet. Click Add Grade Item to start encoding grades for this topic.</p>
                 </div>
               <?php else: ?>
               <form method="post" class="module-form">
@@ -3389,6 +3480,7 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
             <input type="hidden" name="action" value="save_task">
             <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
             <input type="hidden" name="tool" value="tasks">
+            <input type="hidden" name="return_tool" value="<?php echo $tool === 'grades' ? 'grades' : 'tasks'; ?>">
             <div class="mb-3">
               <label class="form-label" for="task_topic_id">Class topic</label>
               <select class="form-select" id="task_topic_id" name="task_topic_id" required>
@@ -3396,7 +3488,7 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
                   <option value="">Add a topic first</option>
                 <?php endif; ?>
                 <?php foreach ($materialFolders as $folder): ?>
-                  <option value="<?php echo (int) $folder['id']; ?>"><?php echo e($folder['name']); ?></option>
+                  <option value="<?php echo (int) $folder['id']; ?>" <?php echo $tool === 'grades' && (int) $folder['id'] === $selectedGradeTopicId ? 'selected' : ''; ?>><?php echo e($folder['name']); ?></option>
                 <?php endforeach; ?>
               </select>
             </div>
@@ -3416,6 +3508,54 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
           <div class="modal-footer">
             <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
             <button type="submit" class="btn btn-primary" <?php echo !$materialFolders ? 'disabled' : ''; ?>>Save Grade</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal fade" id="editTaskModal" tabindex="-1" aria-labelledby="editTaskModalLabel" aria-hidden="true" data-bs-backdrop="static">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content">
+        <div class="modal-header">
+          <div>
+            <span class="section-kicker">Grade</span>
+            <h2 class="modal-title h5" id="editTaskModalLabel">Edit grade item</h2>
+          </div>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <form method="post" class="module-form">
+          <div class="modal-body">
+            <input type="hidden" name="action" value="update_task">
+            <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
+            <input type="hidden" name="tool" value="grades">
+            <input type="hidden" id="edit_task_id" name="task_id" value="<?php echo $selectedTask ? (int) $selectedTask['id'] : 0; ?>">
+            <div class="mb-3">
+              <label class="form-label" for="edit_task_topic_id">Class topic</label>
+              <select class="form-select" id="edit_task_topic_id" name="task_topic_id" required>
+                <?php foreach ($materialFolders as $folder): ?>
+                  <option value="<?php echo (int) $folder['id']; ?>" <?php echo $selectedTask && (int) ($selectedTask['folder_id'] ?? 0) === (int) $folder['id'] ? 'selected' : ''; ?>><?php echo e($folder['name']); ?></option>
+                <?php endforeach; ?>
+              </select>
+            </div>
+            <div class="mb-3">
+              <label class="form-label" for="edit_task_title">Grade title</label>
+              <input type="text" class="form-control" id="edit_task_title" name="task_title" value="<?php echo $selectedTask ? e((string) $selectedTask['task_title']) : ''; ?>" required>
+            </div>
+            <div class="mb-3">
+              <label class="form-label" for="edit_task_date">Grade date</label>
+              <input type="date" class="form-control" id="edit_task_date" name="task_date" value="<?php echo $selectedTask ? e((string) $selectedTask['task_date']) : e(date('Y-m-d')); ?>" required>
+            </div>
+            <div>
+              <label class="form-label" for="edit_task_description">Description</label>
+              <textarea class="form-control" id="edit_task_description" name="description" rows="3"><?php echo $selectedTask ? e((string) ($selectedTask['description'] ?? '')) : ''; ?></textarea>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+            <button type="submit" class="btn btn-primary" <?php echo !$selectedTask ? 'disabled' : ''; ?>>
+              <i class="fa-solid fa-floppy-disk me-2"></i>Save Grade Item
+            </button>
           </div>
         </form>
       </div>
@@ -3907,6 +4047,6 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
       }
     })();
   </script>
-  <script src="js/app.js?v=class-teacher-picker"></script>
+  <script src="js/app.js?v=20260629-roles-permissions"></script>
 </body>
 </html>
