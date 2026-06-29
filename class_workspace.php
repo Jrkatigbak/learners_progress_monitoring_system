@@ -803,15 +803,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         if (!$errors) {
-            // Assign teachers only when they are not connected to any other class.
+            // A teacher should be hidden only when already connected to this class.
             $eligibleStatement = $pdo->prepare(
                 'SELECT teachers.id
                  FROM teachers
                  LEFT JOIN class_teachers
                     ON class_teachers.teacher_id = teachers.id
+                   AND class_teachers.class_id = :class_id
                    AND class_teachers.deleted_at IS NULL
                  LEFT JOIN classes AS legacy_class
                     ON legacy_class.teacher_id = teachers.id
+                   AND legacy_class.id = :legacy_class_id
                    AND legacy_class.deleted_at IS NULL
                  WHERE teachers.id = :teacher_id
                    AND teachers.status = "Active"
@@ -829,6 +831,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             foreach ($selectedTeacherIds as $teacherId) {
                 $eligibleStatement->execute([
+                    'class_id' => $classId,
+                    'legacy_class_id' => $classId,
                     'teacher_id' => $teacherId,
                 ]);
 
@@ -1927,9 +1931,11 @@ $availableTeacherStatement = $pdo->prepare(
      FROM teachers
      LEFT JOIN class_teachers
         ON class_teachers.teacher_id = teachers.id
+       AND class_teachers.class_id = :class_id
        AND class_teachers.deleted_at IS NULL
      LEFT JOIN classes AS legacy_class
         ON legacy_class.teacher_id = teachers.id
+       AND legacy_class.id = :legacy_class_id
        AND legacy_class.deleted_at IS NULL
      WHERE teachers.status = "Active"
        AND teachers.deleted_at IS NULL
@@ -1937,7 +1943,10 @@ $availableTeacherStatement = $pdo->prepare(
        AND legacy_class.id IS NULL
      ORDER BY teachers.full_name'
 );
-$availableTeacherStatement->execute();
+$availableTeacherStatement->execute([
+    'class_id' => $classId,
+    'legacy_class_id' => $classId,
+]);
 $availableTeachers = $availableTeacherStatement->fetchAll();
 
 $pendingEnrollmentStatement = $pdo->prepare(

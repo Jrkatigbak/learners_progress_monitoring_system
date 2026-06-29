@@ -569,7 +569,7 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
                     <span><?php echo (int) $teacher['class_count'] === 1 ? 'Assigned class' : 'Assigned classes'; ?></span>
                   </div>
                   <div class="learner-icon-actions">
-                    <form method="post" class="credential-reset-form" data-confirm-message="Reset password and email new login credentials to this teacher?">
+                    <form method="post" action="teachers.php" class="credential-reset-form" data-confirm-message="Reset password and email new login credentials to this teacher?">
                       <input type="hidden" name="action" value="reset_credentials">
                       <input type="hidden" name="id" value="<?php echo (int) $teacher['id']; ?>">
                       <button type="submit" class="learner-icon-button teacher-reset-button" aria-label="Reset and resend teacher credentials" title="Reset and resend credentials">
@@ -579,7 +579,7 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
                     <a class="learner-icon-button" href="teachers.php?edit=<?php echo (int) $teacher['id']; ?>" aria-label="Edit teacher">
                       <i class="fa-solid fa-pen"></i>
                     </a>
-                    <form method="post" onsubmit="return confirm('Delete this teacher?');">
+                    <form method="post" action="teachers.php" onsubmit="return confirm('Delete this teacher?');">
                       <input type="hidden" name="action" value="delete">
                       <input type="hidden" name="id" value="<?php echo (int) $teacher['id']; ?>">
                       <button type="submit" class="learner-icon-button is-danger" aria-label="Delete teacher">
@@ -620,7 +620,7 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
           </div>
           <a href="teachers.php<?php echo $search !== '' ? '?search=' . urlencode($search) : ''; ?>" class="btn-close" aria-label="Close"></a>
         </div>
-        <form method="post" enctype="multipart/form-data" class="module-form">
+        <form method="post" action="teachers.php" enctype="multipart/form-data" class="module-form">
           <div class="modal-body">
             <input type="hidden" name="id" value="<?php echo (int) $formTeacher['id']; ?>">
             <input type="hidden" name="existing_photo" value="<?php echo e($formTeacher['profile_photo'] ?? ''); ?>">
