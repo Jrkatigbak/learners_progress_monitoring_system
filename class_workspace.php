@@ -278,6 +278,56 @@ function classTopicExists(PDO $pdo, int $classId, int $topicId): bool
     return (bool) $topicStatement->fetch();
 }
 
+function classTaskGradeSettingColumns(PDO $pdo): array
+{
+    $columns = [];
+
+    foreach ($pdo->query('DESCRIBE class_tasks') as $row) {
+        $columns[(string) $row['Field']] = true;
+    }
+
+    return [
+        'max_score' => isset($columns['max_score']),
+        'passing_score' => isset($columns['passing_score']),
+    ];
+}
+
+function learnerGradeColumns(PDO $pdo): array
+{
+    $columns = [];
+
+    foreach ($pdo->query('DESCRIBE learner_grades') as $row) {
+        $columns[(string) $row['Field']] = true;
+    }
+
+    return $columns;
+}
+
+function normalizeGradeItemSettings(array $source, array &$errors): array
+{
+    $maxScoreRaw = trim((string) ($source['max_score'] ?? '100'));
+    $passingScoreRaw = trim((string) ($source['passing_score'] ?? ''));
+    $maxScore = $maxScoreRaw !== '' ? (float) $maxScoreRaw : 100.0;
+    $passingScore = $passingScoreRaw !== '' ? (float) $passingScoreRaw : null;
+
+    if ($maxScore < 1) {
+        $errors[] = 'Max grade must be at least 1.';
+    }
+
+    if ($passingScore !== null && $passingScore < 1) {
+        $errors[] = 'Passing grade must be at least 1.';
+    }
+
+    if ($passingScore !== null && $passingScore > $maxScore) {
+        $errors[] = 'Passing grade cannot be higher than the max grade.';
+    }
+
+    return [
+        'max_score' => $maxScore,
+        'passing_score' => $passingScore,
+    ];
+}
+
 function normalizeTopicSortOrder(PDO $pdo, int $classId): void
 {
     // Keep topic ordering compact per class so the up/down controls swap the nearest neighbor.
@@ -390,6 +440,8 @@ $assignmentUploadDirectory = __DIR__ . '/uploads/assignments';
 $assignmentUploadPathPrefix = 'uploads/assignments/';
 $topicUploadDirectory = __DIR__ . '/uploads/topics';
 $topicUploadPathPrefix = 'uploads/topics/';
+$taskGradeSettingColumns = classTaskGradeSettingColumns($pdo);
+$learnerGradeColumns = learnerGradeColumns($pdo);
 
 if (!$isAdmin && !$isTeacher) {
     header('Location: ' . $auth->redirectPath());
@@ -490,6 +542,116 @@ $courseId = classCourseId($pdo, $class);
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
+
+    if ($action === 'ajax_save_grade_other_remarks') {
+        header('Content-Type: application/json');
+
+        $taskId = (int) ($_POST['task_id'] ?? 0);
+        $learnerId = (int) ($_POST['learner_id'] ?? 0);
+        $scoreValue = trim((string) ($_POST['score'] ?? ''));
+        $resultRemark = trim((string) ($_POST['result_remark'] ?? ''));
+        $otherRemark = trim((string) ($_POST['other_remarks'] ?? ''));
+
+        if (empty($learnerGradeColumns['other_remarks'])) {
+            echo json_encode(['ok' => false, 'message' => 'Other remarks storage is not available.']);
+            exit;
+        }
+
+        $taskStatement = $pdo->prepare('SELECT * FROM class_tasks WHERE id = :id AND class_id = :class_id AND deleted_at IS NULL LIMIT 1');
+        $taskStatement->execute([
+            'id' => $taskId,
+            'class_id' => $classId,
+        ]);
+        $task = $taskStatement->fetch() ?: null;
+
+        if (!$task || $learnerId <= 0) {
+            echo json_encode(['ok' => false, 'message' => 'Select a valid learner grade row.']);
+            exit;
+        }
+
+        $learnerStatement = $pdo->prepare(
+            'SELECT learners.id
+             FROM learners
+             LEFT JOIN course_enrollments ON course_enrollments.learner_id = learners.id
+                AND course_enrollments.deleted_at IS NULL
+             WHERE learners.id = :learner_id
+               AND learners.deleted_at IS NULL
+               AND (
+                 learners.class_id = :class_id
+                 OR (
+                   course_enrollments.course_id = :course_id
+                   AND course_enrollments.enrollment_status IN ("Enrolled", "In Progress", "Completed")
+                 )
+               )
+             LIMIT 1'
+        );
+        $learnerStatement->execute([
+            'learner_id' => $learnerId,
+            'class_id' => $classId,
+            'course_id' => $courseId,
+        ]);
+
+        if (!$learnerStatement->fetch()) {
+            echo json_encode(['ok' => false, 'message' => 'Learner is not enrolled in this class.']);
+            exit;
+        }
+
+        $existingStatement = $pdo->prepare('SELECT id FROM learner_grades WHERE task_id = :task_id AND learner_id = :learner_id AND class_id = :class_id AND deleted_at IS NULL LIMIT 1');
+        $existingStatement->execute([
+            'task_id' => $taskId,
+            'learner_id' => $learnerId,
+            'class_id' => $classId,
+        ]);
+        $existingGradeId = (int) $existingStatement->fetchColumn();
+
+        if ($existingGradeId > 0) {
+            $updateRemark = $pdo->prepare('UPDATE learner_grades SET remarks = :remarks, other_remarks = :other_remarks WHERE id = :id');
+            $updateRemark->execute([
+                'remarks' => $resultRemark !== '' ? $resultRemark : null,
+                'other_remarks' => $otherRemark !== '' ? $otherRemark : null,
+                'id' => $existingGradeId,
+            ]);
+
+            echo json_encode(['ok' => true, 'grade_id' => $existingGradeId, 'message' => 'Saved']);
+            exit;
+        }
+
+        if ($scoreValue === '') {
+            echo json_encode(['ok' => false, 'message' => 'Enter a grade first before autosaving remarks.']);
+            exit;
+        }
+
+        $taskMaxScore = max(1.0, (float) ($task['max_score'] ?? 100));
+        $score = (float) $scoreValue;
+
+        if ($score < 1 || $score > $taskMaxScore) {
+            echo json_encode(['ok' => false, 'message' => 'Grade is outside the allowed range.']);
+            exit;
+        }
+
+        $insertRemark = $pdo->prepare(
+            'INSERT INTO learner_grades
+                (task_id, learner_id, class_id, teacher_id, grade_title, score, max_score, remarks, other_remarks, graded_at, created_by_user_id)
+             VALUES
+                (:task_id, :learner_id, :class_id, :teacher_id, :grade_title, :score, :max_score, :remarks, :other_remarks, :graded_at, :created_by_user_id)'
+        );
+        $insertRemark->execute([
+            'task_id' => $taskId,
+            'learner_id' => $learnerId,
+            'class_id' => $classId,
+            'teacher_id' => $activeTeacherId > 0 ? $activeTeacherId : null,
+            'grade_title' => $task['task_title'],
+            'score' => $score,
+            'max_score' => $taskMaxScore,
+            'remarks' => $resultRemark !== '' ? $resultRemark : null,
+            'other_remarks' => $otherRemark !== '' ? $otherRemark : null,
+            'graded_at' => date('Y-m-d'),
+            'created_by_user_id' => (int) $currentUser['id'],
+        ]);
+
+        echo json_encode(['ok' => true, 'grade_id' => (int) $pdo->lastInsertId(), 'message' => 'Saved']);
+        exit;
+    }
 
     if ($action === 'approve_enrollment_request') {
         $requestId = (int) ($_POST['request_id'] ?? 0);
@@ -1719,6 +1881,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $taskTopicId = (int) ($_POST['task_topic_id'] ?? 0);
         $returnTool = $_POST['return_tool'] ?? 'tasks';
         $returnTool = in_array($returnTool, ['tasks', 'grades'], true) ? $returnTool : 'tasks';
+        $gradeSettings = normalizeGradeItemSettings($_POST, $errors);
 
         if ($title === '') {
             $errors[] = 'Topic title is required.';
@@ -1734,11 +1897,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         if (!$errors) {
             // Grade items can be grouped under the same reusable class topics as resources.
-            $taskStatement = $pdo->prepare(
-                'INSERT INTO class_tasks (class_id, folder_id, teacher_id, task_title, description, task_date, created_by_user_id)
-                 VALUES (:class_id, :folder_id, :teacher_id, :task_title, :description, :task_date, :created_by_user_id)'
-            );
-            $taskStatement->execute([
+            $taskColumns = 'class_id, folder_id, teacher_id, task_title, description, task_date, created_by_user_id';
+            $taskValues = ':class_id, :folder_id, :teacher_id, :task_title, :description, :task_date, :created_by_user_id';
+            $taskParams = [
                 'class_id' => $classId,
                 'folder_id' => $taskTopicId > 0 ? $taskTopicId : null,
                 'teacher_id' => $activeTeacherId > 0 ? $activeTeacherId : null,
@@ -1746,7 +1907,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'description' => $description !== '' ? $description : null,
                 'task_date' => $taskDate,
                 'created_by_user_id' => (int) $currentUser['id'],
-            ]);
+            ];
+
+            if ($taskGradeSettingColumns['max_score']) {
+                $taskColumns .= ', max_score';
+                $taskValues .= ', :max_score';
+                $taskParams['max_score'] = $gradeSettings['max_score'];
+            }
+
+            if ($taskGradeSettingColumns['passing_score']) {
+                $taskColumns .= ', passing_score';
+                $taskValues .= ', :passing_score';
+                $taskParams['passing_score'] = $gradeSettings['passing_score'];
+            }
+
+            $taskStatement = $pdo->prepare(
+                'INSERT INTO class_tasks (' . $taskColumns . ')
+                 VALUES (' . $taskValues . ')'
+            );
+            $taskStatement->execute($taskParams);
             $newTaskId = (int) $pdo->lastInsertId();
 
             if ($returnTool === 'grades') {
@@ -1767,6 +1946,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $description = trim($_POST['description'] ?? '');
         $taskDate = trim($_POST['task_date'] ?? date('Y-m-d'));
         $taskTopicId = (int) ($_POST['task_topic_id'] ?? 0);
+        $gradeSettings = normalizeGradeItemSettings($_POST, $errors);
 
         if ($taskId <= 0) {
             $errors[] = 'Select a valid grade item.';
@@ -1798,30 +1978,45 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         if (!$errors) {
             // Editing a grade item keeps learner scores while syncing their saved grade title.
-            $taskStatement = $pdo->prepare(
-                'UPDATE class_tasks
-                 SET folder_id = :folder_id,
+            $taskSetSql = 'folder_id = :folder_id,
                      task_title = :task_title,
                      description = :description,
-                     task_date = :task_date
-                 WHERE id = :id AND class_id = :class_id AND deleted_at IS NULL'
-            );
-            $taskStatement->execute([
+                     task_date = :task_date';
+            $taskParams = [
                 'folder_id' => $taskTopicId,
                 'task_title' => $title,
                 'description' => $description !== '' ? $description : null,
                 'task_date' => $taskDate,
                 'id' => $taskId,
                 'class_id' => $classId,
-            ]);
+            ];
+
+            if ($taskGradeSettingColumns['max_score']) {
+                $taskSetSql .= ', max_score = :max_score';
+                $taskParams['max_score'] = $gradeSettings['max_score'];
+            }
+
+            if ($taskGradeSettingColumns['passing_score']) {
+                $taskSetSql .= ', passing_score = :passing_score';
+                $taskParams['passing_score'] = $gradeSettings['passing_score'];
+            }
+
+            $taskStatement = $pdo->prepare(
+                'UPDATE class_tasks
+                 SET ' . $taskSetSql . '
+                 WHERE id = :id AND class_id = :class_id AND deleted_at IS NULL'
+            );
+            $taskStatement->execute($taskParams);
 
             $gradeTitleStatement = $pdo->prepare(
                 'UPDATE learner_grades
-                 SET grade_title = :grade_title
+                 SET grade_title = :grade_title,
+                     max_score = :max_score
                  WHERE task_id = :task_id AND class_id = :class_id AND deleted_at IS NULL'
             );
             $gradeTitleStatement->execute([
                 'grade_title' => $title,
+                'max_score' => $gradeSettings['max_score'],
                 'task_id' => $taskId,
                 'class_id' => $classId,
             ]);
@@ -1865,8 +2060,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $errors[] = 'Choose a valid topic.';
         }
 
+        $taskMaxScore = max(1.0, (float) ($task['max_score'] ?? 100));
         $scores = $_POST['scores'] ?? [];
         $remarks = $_POST['remarks'] ?? [];
+        $otherRemarks = $_POST['other_remarks'] ?? [];
 
         if (!$errors) {
             foreach ($scores as $learnerId => $scoreValue) {
@@ -1879,8 +2076,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $score = (float) $scoreValue;
                 $learnerId = (int) $learnerId;
 
-                if ($score < 1 || $score > 100) {
-                    $errors[] = 'Grades must be from 1 to 100.';
+                if ($score < 1 || $score > $taskMaxScore) {
+                    $errors[] = 'Grades must be from 1 to ' . number_format($taskMaxScore, 2) . '.';
                     break;
                 }
 
@@ -1918,44 +2115,63 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 ]);
                 $existingGradeId = (int) $existingStatement->fetchColumn();
                 $remark = trim((string) ($remarks[$learnerId] ?? ''));
+                $otherRemark = trim((string) ($otherRemarks[$learnerId] ?? ''));
 
                 if ($existingGradeId > 0) {
+                    $otherRemarkSetSql = empty($learnerGradeColumns['other_remarks']) ? '' : ', other_remarks = :other_remarks';
                     $gradeStatement = $pdo->prepare(
                         'UPDATE learner_grades
                          SET score = :score,
-                             max_score = 100,
+                             max_score = :max_score,
                              remarks = :remarks,
+                             ' . ltrim($otherRemarkSetSql, ', ') . ($otherRemarkSetSql === '' ? '' : ',') . '
                              graded_at = :graded_at,
                              grade_title = :grade_title,
                              created_by_user_id = :created_by_user_id
                          WHERE id = :id'
                     );
-                    $gradeStatement->execute([
+                    $gradeParams = [
                         'score' => $score,
+                        'max_score' => $taskMaxScore,
                         'remarks' => $remark !== '' ? $remark : null,
                         'graded_at' => date('Y-m-d'),
                         'grade_title' => $task['task_title'],
                         'created_by_user_id' => (int) $currentUser['id'],
                         'id' => $existingGradeId,
-                    ]);
+                    ];
+                    if (!empty($learnerGradeColumns['other_remarks'])) {
+                        $gradeParams['other_remarks'] = $otherRemark !== '' ? $otherRemark : null;
+                    }
+                    $gradeStatement->execute($gradeParams);
                 } else {
+                    $insertColumns = 'task_id, learner_id, class_id, teacher_id, grade_title, score, max_score, remarks, graded_at, created_by_user_id';
+                    $insertValues = ':task_id, :learner_id, :class_id, :teacher_id, :grade_title, :score, :max_score, :remarks, :graded_at, :created_by_user_id';
+                    if (!empty($learnerGradeColumns['other_remarks'])) {
+                        $insertColumns = 'task_id, learner_id, class_id, teacher_id, grade_title, score, max_score, remarks, other_remarks, graded_at, created_by_user_id';
+                        $insertValues = ':task_id, :learner_id, :class_id, :teacher_id, :grade_title, :score, :max_score, :remarks, :other_remarks, :graded_at, :created_by_user_id';
+                    }
                     $gradeStatement = $pdo->prepare(
                         'INSERT INTO learner_grades
-                            (task_id, learner_id, class_id, teacher_id, grade_title, score, max_score, remarks, graded_at, created_by_user_id)
+                            (' . $insertColumns . ')
                          VALUES
-                            (:task_id, :learner_id, :class_id, :teacher_id, :grade_title, :score, 100, :remarks, :graded_at, :created_by_user_id)'
+                            (' . $insertValues . ')'
                     );
-                    $gradeStatement->execute([
+                    $gradeParams = [
                         'task_id' => $taskId,
                         'learner_id' => $learnerId,
                         'class_id' => $classId,
                         'teacher_id' => $activeTeacherId > 0 ? $activeTeacherId : null,
                         'grade_title' => $task['task_title'],
                         'score' => $score,
+                        'max_score' => $taskMaxScore,
                         'remarks' => $remark !== '' ? $remark : null,
                         'graded_at' => date('Y-m-d'),
                         'created_by_user_id' => (int) $currentUser['id'],
-                    ]);
+                    ];
+                    if (!empty($learnerGradeColumns['other_remarks'])) {
+                        $gradeParams['other_remarks'] = $otherRemark !== '' ? $otherRemark : null;
+                    }
+                    $gradeStatement->execute($gradeParams);
                 }
             }
         }
@@ -2313,7 +2529,7 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=20260629-roles-permissions" rel="stylesheet">
+  <link href="css/style.css?v=20260629-grade-status-remarks" rel="stylesheet">
   <?php echo kiwiSystemThemeStyle(); ?>
 </head>
 <body class="dashboard-page class-workspace-page class-workspace-<?php echo e($tool); ?>">
@@ -3144,7 +3360,7 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
                         <option value="">No grade items in this topic</option>
                       <?php endif; ?>
                       <?php foreach ($gradeTasks as $taskRow): ?>
-                        <option value="<?php echo (int) $taskRow['id']; ?>" data-topic-id="<?php echo (int) ($taskRow['folder_id'] ?? 0); ?>" data-title="<?php echo e((string) $taskRow['task_title']); ?>" data-description="<?php echo e((string) ($taskRow['description'] ?? '')); ?>" data-task-date="<?php echo e((string) $taskRow['task_date']); ?>" <?php echo $selectedTask && (int) $selectedTask['id'] === (int) $taskRow['id'] ? 'selected' : ''; ?>>
+                        <option value="<?php echo (int) $taskRow['id']; ?>" data-topic-id="<?php echo (int) ($taskRow['folder_id'] ?? 0); ?>" data-title="<?php echo e((string) $taskRow['task_title']); ?>" data-description="<?php echo e((string) ($taskRow['description'] ?? '')); ?>" data-task-date="<?php echo e((string) $taskRow['task_date']); ?>" data-max-score="<?php echo e((string) ($taskRow['max_score'] ?? 100)); ?>" data-passing-score="<?php echo e((string) ($taskRow['passing_score'] ?? '')); ?>" <?php echo $selectedTask && (int) $selectedTask['id'] === (int) $taskRow['id'] ? 'selected' : ''; ?>>
                           <?php echo e($taskRow['task_title']); ?>
                         </option>
                       <?php endforeach; ?>
@@ -3168,6 +3384,10 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
                   <p>No grade items are saved under this topic yet. Click Add Grade Item to start encoding grades for this topic.</p>
                 </div>
               <?php else: ?>
+              <?php
+                $selectedTaskMaxScore = max(1.0, (float) ($selectedTask['max_score'] ?? 100));
+                $selectedTaskPassingScore = isset($selectedTask['passing_score']) && $selectedTask['passing_score'] !== null ? (float) $selectedTask['passing_score'] : null;
+              ?>
               <form method="post" class="module-form">
                 <input type="hidden" name="action" value="save_grades">
                 <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
@@ -3180,25 +3400,42 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
                       <tr>
                         <th>Learner</th>
                         <th>Grade</th>
-                        <th>Remarks</th>
+                        <th>Status</th>
+                        <th>Other remarks</th>
                       </tr>
                     </thead>
                     <tbody>
+                      <?php if ($selectedTask): ?>
+                        <tr>
+                          <td colspan="4" class="text-secondary small">
+                            Grade range is 1-<?php echo e(number_format($selectedTaskMaxScore, 2)); ?><?php echo $selectedTaskPassingScore !== null ? ' · Passing grade: ' . e(number_format($selectedTaskPassingScore, 2)) : ''; ?>
+                          </td>
+                        </tr>
+                      <?php endif; ?>
                       <?php if (!$learners): ?>
-                        <tr><td colspan="3" class="text-center text-secondary py-5">No enrolled learners to grade.</td></tr>
+                        <tr><td colspan="4" class="text-center text-secondary py-5">No enrolled learners to grade.</td></tr>
                       <?php endif; ?>
                       <?php foreach ($learners as $learner): ?>
-                        <?php $grade = $gradeRows[(int) $learner['id']] ?? null; ?>
+                        <?php
+                          $grade = $gradeRows[(int) $learner['id']] ?? null;
+                          $gradeStatus = trim((string) ($grade['remarks'] ?? ''));
+                          $statusClass = strcasecmp($gradeStatus, 'Pass') === 0 ? 'text-bg-success' : (strcasecmp($gradeStatus, 'Failed') === 0 ? 'text-bg-danger' : 'text-bg-secondary');
+                        ?>
                         <tr>
                           <td>
                             <strong><?php echo e(trim($learner['first_name'] . ' ' . $learner['last_name'])); ?></strong><br>
                             <span class="text-secondary small"><?php echo e($learner['learner_number']); ?></span>
                           </td>
                           <td style="max-width: 160px;">
-                            <input type="number" class="form-control" name="scores[<?php echo (int) $learner['id']; ?>]" min="1" max="100" step="0.01" value="<?php echo $grade ? e((string) $grade['score']) : ''; ?>" placeholder="1-100">
+                            <input type="number" class="form-control grade-score-input" name="scores[<?php echo (int) $learner['id']; ?>]" min="1" max="<?php echo e((string) $selectedTaskMaxScore); ?>" step="0.01" value="<?php echo $grade ? e((string) $grade['score']) : ''; ?>" placeholder="1-<?php echo e(number_format($selectedTaskMaxScore, 0)); ?>" data-passing-score="<?php echo $selectedTaskPassingScore !== null ? e((string) $selectedTaskPassingScore) : ''; ?>">
+                            <input type="hidden" class="grade-result-input" name="remarks[<?php echo (int) $learner['id']; ?>]" value="<?php echo e($gradeStatus); ?>">
                           </td>
                           <td>
-                            <input type="text" class="form-control" name="remarks[<?php echo (int) $learner['id']; ?>]" value="<?php echo $grade ? e((string) ($grade['remarks'] ?? '')) : ''; ?>" placeholder="Optional">
+                            <span class="badge <?php echo e($statusClass); ?> grade-status-badge"><?php echo $gradeStatus !== '' ? e($gradeStatus) : 'No result'; ?></span>
+                          </td>
+                          <td>
+                            <input type="text" class="form-control grade-other-remarks-input" name="other_remarks[<?php echo (int) $learner['id']; ?>]" value="<?php echo $grade ? e((string) ($grade['other_remarks'] ?? '')) : ''; ?>" placeholder="Optional" data-grade-id="<?php echo $grade ? (int) $grade['id'] : 0; ?>" data-task-id="<?php echo $selectedTask ? (int) $selectedTask['id'] : 0; ?>" data-learner-id="<?php echo (int) $learner['id']; ?>">
+                            <div class="form-text grade-autosave-status" aria-live="polite"></div>
                           </td>
                         </tr>
                       <?php endforeach; ?>
@@ -3500,6 +3737,19 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
               <label class="form-label" for="task_date">Grade date</label>
               <input type="date" class="form-control" id="task_date" name="task_date" value="<?php echo e(date('Y-m-d')); ?>" required>
             </div>
+            <div class="row g-3 mb-3">
+              <div class="col-md-6">
+                <label class="form-label" for="task_max_score">Max grade</label>
+                <input type="number" class="form-control grade-max-score-input" id="task_max_score" name="max_score" min="1" step="0.01" value="100" required>
+              </div>
+              <div class="col-md-6">
+                <label class="form-label" for="task_passing_score">Passing grade</label>
+                <input type="number" class="form-control grade-passing-score-input" id="task_passing_score" name="passing_score" min="1" step="0.01" placeholder="Optional">
+              </div>
+            </div>
+            <div class="alert alert-warning py-2 d-none grade-setting-warning" role="alert">
+              Passing grade cannot be higher than the max grade.
+            </div>
             <div>
               <label class="form-label" for="description">Description</label>
               <textarea class="form-control" id="description" name="description" rows="3"></textarea>
@@ -3545,6 +3795,19 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
             <div class="mb-3">
               <label class="form-label" for="edit_task_date">Grade date</label>
               <input type="date" class="form-control" id="edit_task_date" name="task_date" value="<?php echo $selectedTask ? e((string) $selectedTask['task_date']) : e(date('Y-m-d')); ?>" required>
+            </div>
+            <div class="row g-3 mb-3">
+              <div class="col-md-6">
+                <label class="form-label" for="edit_task_max_score">Max grade</label>
+                <input type="number" class="form-control grade-max-score-input" id="edit_task_max_score" name="max_score" min="1" step="0.01" value="<?php echo $selectedTask ? e((string) ($selectedTask['max_score'] ?? 100)) : '100'; ?>" required>
+              </div>
+              <div class="col-md-6">
+                <label class="form-label" for="edit_task_passing_score">Passing grade</label>
+                <input type="number" class="form-control grade-passing-score-input" id="edit_task_passing_score" name="passing_score" min="1" step="0.01" value="<?php echo $selectedTask && isset($selectedTask['passing_score']) && $selectedTask['passing_score'] !== null ? e((string) $selectedTask['passing_score']) : ''; ?>" placeholder="Optional">
+              </div>
+            </div>
+            <div class="alert alert-warning py-2 d-none grade-setting-warning" role="alert">
+              Passing grade cannot be higher than the max grade.
             </div>
             <div>
               <label class="form-label" for="edit_task_description">Description</label>
@@ -4047,6 +4310,6 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
       }
     })();
   </script>
-  <script src="js/app.js?v=20260629-roles-permissions"></script>
+  <script src="js/app.js?v=20260629-grade-status-remarks"></script>
 </body>
 </html>

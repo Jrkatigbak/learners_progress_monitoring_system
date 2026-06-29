@@ -353,7 +353,103 @@ $(function () {
     $('#edit_task_topic_id').val($selectedTask.attr('data-topic-id') || '');
     $('#edit_task_title').val($selectedTask.attr('data-title') || '');
     $('#edit_task_date').val($selectedTask.attr('data-task-date') || '');
+    $('#edit_task_max_score').val($selectedTask.attr('data-max-score') || '100');
+    $('#edit_task_passing_score').val($selectedTask.attr('data-passing-score') || '');
     $('#edit_task_description').val($selectedTask.attr('data-description') || '');
+    validateGradeSettings($('#editTaskModal'));
+  });
+
+  function validateGradeSettings($scope) {
+    var $maxInput = $scope.find('.grade-max-score-input');
+    var $passingInput = $scope.find('.grade-passing-score-input');
+    var $warning = $scope.find('.grade-setting-warning');
+    var $submit = $scope.find('button[type="submit"]');
+    var maxScore = parseFloat($maxInput.val() || '0');
+    var passingScore = parseFloat($passingInput.val() || '0');
+    var hasWarning = passingScore > 0 && maxScore > 0 && passingScore > maxScore;
+
+    // Warn before submit so invalid passing grades do not wait for a server round trip.
+    $warning.toggleClass('d-none', !hasWarning);
+    $submit.prop('disabled', hasWarning);
+  }
+
+  $(document).on('input', '.grade-max-score-input, .grade-passing-score-input', function () {
+    validateGradeSettings($(this).closest('.modal'));
+  });
+
+  $('#taskModal, #editTaskModal').on('shown.bs.modal', function () {
+    validateGradeSettings($(this));
+  });
+
+  $(document).on('input', '.grade-score-input', function () {
+    var $scoreInput = $(this);
+    var $row = $scoreInput.closest('tr');
+    var $resultInput = $row.find('.grade-result-input');
+    var $statusBadge = $row.find('.grade-status-badge');
+    var scoreValue = $scoreInput.val();
+    var passingScore = parseFloat($scoreInput.attr('data-passing-score') || '0');
+    var score = parseFloat(scoreValue || '0');
+    var result = '';
+
+    // While typing grades, automatically mark the learner result from the grade item's passing score.
+    if (!scoreValue || passingScore <= 0 || !$resultInput.length) {
+      result = '';
+      $resultInput.val(result);
+      $statusBadge
+        .removeClass('text-bg-success text-bg-danger')
+        .addClass('text-bg-secondary')
+        .text('No result');
+      return;
+    }
+
+    result = score >= passingScore ? 'Pass' : 'Failed';
+    $resultInput.val(result);
+    $statusBadge
+      .removeClass('text-bg-success text-bg-danger text-bg-secondary')
+      .addClass(result === 'Pass' ? 'text-bg-success' : 'text-bg-danger')
+      .text(result);
+  });
+
+  var gradeRemarkSaveTimers = {};
+
+  $(document).on('input', '.grade-other-remarks-input', function () {
+    var $input = $(this);
+    var $row = $input.closest('tr');
+    var learnerId = $input.attr('data-learner-id') || '';
+    var timerKey = learnerId || $input.attr('name') || 'grade-remark';
+    var $status = $row.find('.grade-autosave-status');
+
+    window.clearTimeout(gradeRemarkSaveTimers[timerKey]);
+    $status.removeClass('text-success text-danger').addClass('text-secondary').text('Saving...');
+
+    gradeRemarkSaveTimers[timerKey] = window.setTimeout(function () {
+      $.ajax({
+        method: 'POST',
+        url: window.location.href,
+        dataType: 'json',
+        data: {
+          action: 'ajax_save_grade_other_remarks',
+          class_id: $('input[name="class_id"]').first().val() || '',
+          task_id: $input.attr('data-task-id') || $('input[name="task_id"]').val() || '',
+          learner_id: learnerId,
+          score: $row.find('.grade-score-input').val() || '',
+          result_remark: $row.find('.grade-result-input').val() || '',
+          other_remarks: $input.val()
+        }
+      }).done(function (response) {
+        if (response && response.ok) {
+          if (response.grade_id) {
+            $input.attr('data-grade-id', response.grade_id);
+          }
+          $status.removeClass('text-secondary text-danger').addClass('text-success').text('Saved');
+          return;
+        }
+
+        $status.removeClass('text-secondary text-success').addClass('text-danger').text((response && response.message) || 'Not saved');
+      }).fail(function () {
+        $status.removeClass('text-secondary text-success').addClass('text-danger').text('Not saved');
+      });
+    }, 500);
   });
 
   $(document).on('click', '.edit-quiz-button', function () {

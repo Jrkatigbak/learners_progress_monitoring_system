@@ -541,7 +541,7 @@ if ($errors) {
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=20260629-roles-permissions" rel="stylesheet">
+  <link href="css/style.css?v=20260629-grade-status-remarks" rel="stylesheet">
 </head>
 <body class="dashboard-page">
   <div class="app-layout">
@@ -771,6 +771,6 @@ if ($errors) {
       });
     </script>
   <?php endif; ?>
-  <script src="js/app.js?v=20260629-roles-permissions"></script>
+  <script src="js/app.js?v=20260629-grade-status-remarks"></script>
 </body>
 </html>

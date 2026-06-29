@@ -280,7 +280,7 @@ $successMessages = [
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=20260629-roles-permissions" rel="stylesheet">
+  <link href="css/style.css?v=20260629-grade-status-remarks" rel="stylesheet">
 </head>
 <body class="dashboard-page">
   <div class="app-layout">
@@ -298,6 +298,7 @@ $successMessages = [
         <a href="enrolled_courses.php"><i class="fa-solid fa-book-open-reader"></i> Enrolled Class</a>
         <a class="active" href="learner_quizzes.php"><i class="fa-solid fa-circle-question"></i> Quizzes</a>
         <a href="learner_assignments.php"><i class="fa-solid fa-file-pen"></i> Assignments</a>
+        <a href="learner_grades.php"><i class="fa-solid fa-star"></i> Grades</a>
       </nav>
       <div class="sidebar-footer">
         <p class="mb-1">Logged in as</p>
@@ -466,6 +467,6 @@ $successMessages = [
       renderTimer();
     })();
   </script>
-  <script src="js/app.js?v=20260629-roles-permissions"></script>
+  <script src="js/app.js?v=20260629-grade-status-remarks"></script>
 </body>
 </html>
