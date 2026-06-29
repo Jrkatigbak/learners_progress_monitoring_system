@@ -13,6 +13,8 @@ uploads/classes/*
 !uploads/classes/.gitkeep
 uploads/teachers/*
 !uploads/teachers/.gitkeep
+uploads/topics/*
+!uploads/topics/.gitkeep
 uploads/materials/*
 !uploads/materials/.gitkeep
 uploads/assignments/*

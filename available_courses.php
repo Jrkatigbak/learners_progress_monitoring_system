@@ -20,6 +20,7 @@ $learnerStatement = $pdo->prepare(
     'SELECT id, learner_number, first_name, last_name, email, profile_photo
      FROM learners
      WHERE email = :email
+       AND deleted_at IS NULL
      LIMIT 1'
 );
 $learnerStatement->execute(['email' => $currentUser['email']]);
@@ -37,7 +38,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'reque
     }
 
     if (!$errors) {
-        $courseStatement = $pdo->prepare("SELECT id FROM courses WHERE id = :id AND status = 'Active' LIMIT 1");
+        $courseStatement = $pdo->prepare("SELECT id FROM courses WHERE id = :id AND status = 'Active' AND deleted_at IS NULL LIMIT 1");
         $courseStatement->execute(['id' => $courseId]);
 
         if (!$courseStatement->fetch()) {
@@ -55,6 +56,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'reque
                     WHEN enrollment_status IN ('Disapproved', 'Dropped') THEN 'Pending'
                     ELSE enrollment_status
                 END"
+                . ', deleted_at = NULL'
         );
         $enrollStatement->execute([
             'learner_id' => (int) $learner['id'],
@@ -79,7 +81,9 @@ $courseStatement = $pdo->prepare(
      LEFT JOIN course_enrollments
        ON course_enrollments.course_id = courses.id
       AND course_enrollments.learner_id = :learner_id
+      AND course_enrollments.deleted_at IS NULL
      WHERE courses.status = 'Active'
+       AND courses.deleted_at IS NULL
      ORDER BY courses.course_name"
 );
 $courseStatement->execute(['learner_id' => $learner ? (int) $learner['id'] : 0]);

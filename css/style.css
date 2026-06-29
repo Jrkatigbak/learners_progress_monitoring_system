@@ -4,6 +4,7 @@
   --yellow: #f7c84b;
   --green: #4c8f17;
   --green-dark: #2f6f11;
+  --danger: #dc3545;
   --ink: #252019;
   --muted: #7d756c;
   --soft: #fffaf2;
@@ -182,6 +183,30 @@ body {
   --bs-btn-hover-border-color: var(--brand-dark);
   --bs-btn-active-bg: var(--brand-dark);
   --bs-btn-active-border-color: var(--brand-dark);
+}
+
+.btn-success {
+  --bs-btn-bg: var(--green);
+  --bs-btn-border-color: var(--green);
+  --bs-btn-hover-bg: var(--green-dark);
+  --bs-btn-hover-border-color: var(--green-dark);
+  --bs-btn-active-bg: var(--green-dark);
+  --bs-btn-active-border-color: var(--green-dark);
+}
+
+.btn-warning {
+  --bs-btn-bg: var(--yellow);
+  --bs-btn-border-color: var(--yellow);
+  --bs-btn-hover-bg: var(--brand-dark);
+  --bs-btn-hover-border-color: var(--brand-dark);
+  --bs-btn-color: var(--ink);
+}
+
+.btn-danger {
+  --bs-btn-bg: var(--danger);
+  --bs-btn-border-color: var(--danger);
+  --bs-btn-hover-bg: var(--danger);
+  --bs-btn-hover-border-color: var(--danger);
 }
 
 .app-layout {
@@ -465,6 +490,14 @@ body {
   color: var(--green) !important;
 }
 
+.text-warning {
+  color: var(--yellow) !important;
+}
+
+.text-danger {
+  color: var(--danger) !important;
+}
+
 .bg-primary-subtle,
 .bg-info-subtle {
   background-color: rgba(245, 130, 32, 0.13) !important;
@@ -486,6 +519,15 @@ body {
   background-color: var(--green) !important;
 }
 
+.text-bg-warning {
+  background-color: var(--yellow) !important;
+  color: var(--ink) !important;
+}
+
+.text-bg-danger {
+  background-color: var(--danger) !important;
+}
+
 .metric-icon {
   width: 46px;
   height: 46px;
@@ -505,6 +547,190 @@ body {
   font-weight: 800;
   letter-spacing: -0.04em;
   margin-bottom: 8px;
+}
+
+.metric-card-link {
+  display: block;
+  color: inherit;
+  text-decoration: none;
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.metric-card-link:hover {
+  transform: translateY(-3px);
+  border-color: rgba(245, 130, 32, 0.38);
+  box-shadow: 0 20px 48px rgba(245, 130, 32, 0.14);
+}
+
+.settings-logo-preview {
+  width: 118px;
+  height: 118px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 28px;
+  background: #fff;
+  box-shadow: 0 16px 34px var(--shadow);
+}
+
+.settings-logo-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.settings-color-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.settings-color-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface-alt);
+  font-weight: 800;
+}
+
+.settings-color-field input {
+  width: 54px;
+  height: 38px;
+  flex: 0 0 54px;
+  padding: 0;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+}
+
+.settings-button-preview {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.permission-check-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.permission-check-grid label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface-alt);
+}
+
+.permission-check-grid input {
+  width: 20px;
+  height: 20px;
+  margin-top: 2px;
+  accent-color: var(--brand);
+}
+
+.permission-check-grid strong,
+.permission-check-grid small {
+  display: block;
+}
+
+.permission-check-grid small {
+  color: var(--muted);
+}
+
+.role-card-list {
+  display: grid;
+  gap: 12px;
+}
+
+.role-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 16px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--surface-alt);
+}
+
+.role-card h3 {
+  margin: 0 0 4px;
+  color: var(--ink);
+  font-size: 1rem;
+  font-weight: 850;
+}
+
+.role-card p {
+  margin: 0 0 10px;
+  color: var(--muted);
+}
+
+.role-permission-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.role-permission-tags span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(245, 130, 32, 0.12);
+  color: var(--brand-dark);
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.permission-matrix-table th,
+.permission-matrix-table td,
+.permission-summary-table th,
+.permission-summary-table td {
+  vertical-align: middle;
+}
+
+.permission-matrix-check {
+  width: 24px;
+  height: 24px;
+  accent-color: var(--green);
+}
+
+.permission-summary-checks {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px;
+  min-width: 88px;
+}
+
+.permission-summary-checks span {
+  width: 24px;
+  height: 24px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  color: var(--muted);
+  background: var(--surface-alt);
+  font-size: 0.72rem;
+  font-weight: 900;
+}
+
+.permission-summary-checks span.is-checked {
+  border-color: rgba(76, 143, 23, 0.3);
+  background: rgba(76, 143, 23, 0.14);
+  color: var(--green);
 }
 
 .table > :not(caption) > * > * {
@@ -1387,7 +1613,7 @@ body {
 }
 
 .learner-status-pill.is-danger {
-  background: #ef4d4d;
+  background: var(--danger);
 }
 
 .learner-rate {
@@ -1525,12 +1751,12 @@ body {
 }
 
 .learner-icon-button.is-danger {
-  color: #d95555;
+  color: var(--danger);
 }
 
 .learner-icon-button.is-danger:hover {
-  border-color: #d95555;
-  background: #d95555;
+  border-color: var(--danger);
+  background: var(--danger);
   color: #fff;
 }
 
@@ -1646,6 +1872,31 @@ body {
   margin-bottom: 10px;
 }
 
+.class-stat-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.class-stat-badges span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 28px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-alt);
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.class-stat-badges i {
+  color: var(--brand);
+}
+
 .class-description {
   margin: 0;
 }
@@ -1691,6 +1942,295 @@ body {
   transform: none;
 }
 
+.teacher-profile-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.85fr) minmax(0, 1.65fr);
+  gap: 18px;
+}
+
+.teacher-profile-summary-card,
+.teacher-assigned-courses-card {
+  min-width: 0;
+}
+
+.teacher-profile-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 12px;
+}
+
+.teacher-profile-photo {
+  width: 84px;
+  height: 84px;
+  flex: 0 0 84px;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  border-radius: 24px;
+  background: linear-gradient(135deg, var(--brand), var(--green-dark));
+  color: #fff;
+  font-size: 1.6rem;
+  font-weight: 900;
+  box-shadow: 0 14px 28px rgba(245, 130, 32, 0.2);
+}
+
+.teacher-profile-photo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.teacher-profile-header h2 {
+  margin: 0 0 4px;
+  color: var(--ink);
+  font-size: 1.22rem;
+  font-weight: 850;
+}
+
+.teacher-profile-header p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.teacher-profile-meta {
+  display: grid;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.teacher-profile-meta span {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 0.92rem;
+  overflow-wrap: anywhere;
+}
+
+.teacher-profile-meta i {
+  width: 20px;
+  color: var(--brand);
+}
+
+.teacher-course-list {
+  display: grid;
+  gap: 12px;
+}
+
+.teacher-course-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 84px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 12px;
+  color: inherit;
+  text-decoration: none;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--surface-alt);
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.teacher-course-row:hover {
+  transform: translateY(-3px);
+  border-color: rgba(245, 130, 32, 0.42);
+  box-shadow: 0 16px 32px rgba(245, 130, 32, 0.14);
+}
+
+.teacher-course-thumb {
+  width: 84px;
+  aspect-ratio: 4 / 3;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  border-radius: 14px;
+  background:
+    radial-gradient(circle at 22% 16%, rgba(247, 200, 75, 0.58), transparent 34%),
+    linear-gradient(135deg, var(--brand), var(--green-dark));
+  color: #fff;
+}
+
+.teacher-course-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.teacher-course-copy {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.teacher-course-copy strong {
+  color: var(--ink);
+  font-size: 1rem;
+  overflow-wrap: anywhere;
+}
+
+.teacher-course-copy small,
+.teacher-course-copy em {
+  color: var(--muted);
+  font-style: normal;
+}
+
+.teacher-course-copy small {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.teacher-course-copy em {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.teacher-course-empty {
+  min-height: 150px;
+}
+
+.pending-enrollment-list {
+  display: grid;
+  gap: 12px;
+}
+
+.pending-enrollment-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 16px;
+  border: 1px solid rgba(245, 130, 32, 0.26);
+  border-radius: 18px;
+  background: linear-gradient(135deg, rgba(245, 130, 32, 0.08), rgba(76, 143, 23, 0.06));
+}
+
+.pending-enrollment-card h3 {
+  margin: 4px 0 8px;
+  color: var(--ink);
+  font-size: 1rem;
+  font-weight: 850;
+}
+
+.pending-enrollment-card p {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin: 0 0 4px;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.pending-enrollment-card p i {
+  margin-right: 6px;
+  color: var(--brand);
+}
+
+.pending-enrollment-card small {
+  color: var(--muted);
+}
+
+.pending-enrollment-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.pending-enrollment-actions form {
+  margin: 0;
+}
+
+.enrollment-public-page {
+  align-items: start;
+  padding: 34px 18px;
+}
+
+.enrollment-form-shell {
+  width: min(760px, 100%);
+  display: grid;
+  gap: 16px;
+}
+
+.enrollment-form-header,
+.enrollment-form-card .card {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: 0 16px 42px var(--shadow);
+}
+
+.enrollment-form-banner {
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 18% 22%, rgba(247, 200, 75, 0.56), transparent 30%),
+    linear-gradient(135deg, var(--brand), var(--green-dark));
+}
+
+.enrollment-form-banner img {
+  display: block;
+  width: 100%;
+  height: auto;
+  object-fit: contain;
+}
+
+.enrollment-form-banner-placeholder {
+  width: 100%;
+  min-height: 260px;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-size: 2.4rem;
+}
+
+.enrollment-form-title {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 16px;
+  padding: 22px;
+  border-top: 8px solid var(--brand);
+}
+
+.enrollment-form-title .brand-logo {
+  width: 58px;
+  height: 58px;
+  border-radius: 18px;
+}
+
+.enrollment-form-title h1 {
+  margin: 4px 0 8px;
+  color: var(--ink);
+  font-size: clamp(1.6rem, 4vw, 2.5rem);
+  line-height: 1.08;
+  font-weight: 850;
+}
+
+.enrollment-form-title p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.enrollment-class-description {
+  max-width: 620px;
+  margin-top: 10px !important;
+  color: var(--ink) !important;
+  line-height: 1.55;
+}
+
+.enrollment-form-card {
+  width: 100%;
+}
+
+.enrollment-form-card .card-body {
+  padding: 28px !important;
+}
+
 .class-learner-picker-modal {
   max-width: min(1320px, calc(100vw - 32px));
 }
@@ -1699,6 +2239,30 @@ body {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
+}
+
+.enrollment-link-copy-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface-alt);
+}
+
+.enrollment-link-copy-bar a {
+  display: block;
+  width: 100%;
+  color: var(--brand-dark);
+  font-weight: 700;
+  overflow-wrap: anywhere;
+  text-decoration: none;
+}
+
+.enrollment-link-copy-bar a:hover {
+  color: var(--brand);
 }
 
 .class-learner-picker-card {
@@ -2256,6 +2820,19 @@ body {
     flex-direction: column;
   }
 
+  .teacher-profile-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .pending-enrollment-card {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .pending-enrollment-actions {
+    justify-content: flex-start;
+  }
+
   .learner-grid,
   .teacher-card-grid,
   .enrollment-card-grid {
@@ -2270,6 +2847,14 @@ body {
   .class-learner-picker-grid,
   .classmate-grid {
     grid-template-columns: 1fr;
+  }
+
+  .enrollment-link-copy-bar {
+    grid-template-columns: 1fr;
+  }
+
+  .enrollment-link-copy-bar .btn {
+    justify-self: start;
   }
 
   .topic-card-body {
@@ -2296,5 +2881,26 @@ body {
 
   .class-card-grid {
     grid-template-columns: 1fr;
+  }
+
+  .teacher-course-row {
+    grid-template-columns: 68px minmax(0, 1fr);
+  }
+
+  .teacher-course-thumb {
+    width: 68px;
+  }
+
+  .teacher-course-enter {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+
+  .enrollment-form-title {
+    grid-template-columns: 1fr;
+  }
+
+  .enrollment-form-banner {
+    min-height: 0;
   }
 }

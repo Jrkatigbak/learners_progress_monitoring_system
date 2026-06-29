@@ -11,7 +11,7 @@ class Auth
 
     public function attempt(string $email, string $password): bool
     {
-        $statement = $this->db->prepare('SELECT id, name, email, password_hash, role FROM users WHERE email = :email ORDER BY FIELD(role, "admin", "teacher", "learner")');
+        $statement = $this->db->prepare('SELECT id, name, email, password_hash, role FROM users WHERE email = :email AND deleted_at IS NULL ORDER BY FIELD(role, "admin", "staff", "teacher", "learner")');
         $statement->execute(['email' => $email]);
         $users = $statement->fetchAll();
         $user = null;
@@ -49,6 +49,23 @@ class Auth
         return ($_SESSION['user']['role'] ?? '') === 'admin';
     }
 
+    public function isStaff(): bool
+    {
+        return ($_SESSION['user']['role'] ?? '') === 'staff';
+    }
+
+    public function isAdminSideUser(): bool
+    {
+        $role = (string) ($_SESSION['user']['role'] ?? '');
+
+        if ($role === '' || in_array($role, ['teacher', 'learner'], true)) {
+            return false;
+        }
+
+        // Any non-learner/non-teacher role created in User Management can use admin-side permission checks.
+        return true;
+    }
+
     public function isLearner(): bool
     {
         return ($_SESSION['user']['role'] ?? '') === 'learner';
@@ -70,7 +87,7 @@ class Auth
             return 'teacher_dashboard.php';
         }
 
-        return 'dashboard.php';
+        return $this->isAdminSideUser() ? 'dashboard.php' : 'login.php';
     }
 
     public function check(): bool

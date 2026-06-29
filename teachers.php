@@ -42,7 +42,7 @@ function deleteTeacherPhoto(string $photoPath): void
 }
 
 if (isset($_GET['edit'])) {
-    $editStatement = $pdo->prepare('SELECT * FROM teachers WHERE id = :id LIMIT 1');
+    $editStatement = $pdo->prepare('SELECT * FROM teachers WHERE id = :id AND deleted_at IS NULL LIMIT 1');
     $editStatement->execute(['id' => (int) $_GET['edit']]);
     $editingTeacher = $editStatement->fetch() ?: null;
 }
@@ -101,7 +101,8 @@ function syncTeacherLogin(PDO $pdo, string $name, string $email): ?string
          VALUES (:name, :email, :password_hash, 'teacher')
          ON DUPLICATE KEY UPDATE
             name = VALUES(name),
-            password_hash = VALUES(password_hash)"
+            password_hash = VALUES(password_hash),
+            deleted_at = NULL"
     );
     $statement->execute([
         'name' => $name,
@@ -120,7 +121,8 @@ function resetTeacherLogin(PDO $pdo, string $name, string $email): string
          VALUES (:name, :email, :password_hash, 'teacher')
          ON DUPLICATE KEY UPDATE
             name = VALUES(name),
-            password_hash = VALUES(password_hash)"
+            password_hash = VALUES(password_hash),
+            deleted_at = NULL"
     );
     $statement->execute([
         'name' => $name,
@@ -136,7 +138,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if ($action === 'reset_credentials') {
         $teacherId = (int) ($_POST['id'] ?? 0);
-        $teacherStatement = $pdo->prepare('SELECT full_name, email FROM teachers WHERE id = :id LIMIT 1');
+        $teacherStatement = $pdo->prepare('SELECT full_name, email FROM teachers WHERE id = :id AND deleted_at IS NULL LIMIT 1');
         $teacherStatement->execute(['id' => $teacherId]);
         $teacher = $teacherStatement->fetch() ?: null;
 
@@ -168,9 +170,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $classCountStatement = $pdo->prepare(
             'SELECT COUNT(DISTINCT class_id)
              FROM (
-                SELECT id AS class_id FROM classes WHERE teacher_id = :legacy_teacher_id
+                SELECT id AS class_id FROM classes WHERE teacher_id = :legacy_teacher_id AND deleted_at IS NULL
                 UNION
-                SELECT class_id FROM class_teachers WHERE teacher_id = :assigned_teacher_id
+                SELECT class_id FROM class_teachers WHERE teacher_id = :assigned_teacher_id AND deleted_at IS NULL
              ) AS assigned_classes'
         );
         $classCountStatement->execute([
@@ -183,19 +185,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             exit;
         }
 
-        $photoStatement = $pdo->prepare('SELECT email, profile_photo FROM teachers WHERE id = :id LIMIT 1');
+        $photoStatement = $pdo->prepare('SELECT email, profile_photo FROM teachers WHERE id = :id AND deleted_at IS NULL LIMIT 1');
         $photoStatement->execute(['id' => $teacherId]);
         $teacherToDelete = $photoStatement->fetch() ?: [];
         $emailToDelete = (string) ($teacherToDelete['email'] ?? '');
-        $photoToDelete = (string) ($teacherToDelete['profile_photo'] ?? '');
 
-        // Delete only unassigned teachers so existing class records do not lose their teacher.
-        $deleteStatement = $pdo->prepare('DELETE FROM teachers WHERE id = :id');
+        // Soft delete only unassigned teachers so existing class history remains intact.
+        $deleteStatement = $pdo->prepare('UPDATE teachers SET deleted_at = NOW(), status = "Inactive" WHERE id = :id AND deleted_at IS NULL');
         $deleteStatement->execute(['id' => $teacherId]);
-        deleteTeacherPhoto($photoToDelete);
 
         if ($emailToDelete !== '') {
-            $userDeleteStatement = $pdo->prepare("DELETE FROM users WHERE email = :email AND role = 'teacher'");
+            $userDeleteStatement = $pdo->prepare("UPDATE users SET deleted_at = NOW() WHERE email = :email AND role = 'teacher' AND deleted_at IS NULL");
             $userDeleteStatement->execute(['email' => $emailToDelete]);
         }
 
@@ -357,17 +357,20 @@ if ($search !== '') {
                 (
                     SELECT COUNT(DISTINCT assigned_classes.class_id)
                     FROM (
-                        SELECT id AS class_id, teacher_id FROM classes WHERE teacher_id IS NOT NULL
+                        SELECT id AS class_id, teacher_id FROM classes WHERE teacher_id IS NOT NULL AND deleted_at IS NULL
                         UNION
-                        SELECT class_id, teacher_id FROM class_teachers
+                        SELECT class_id, teacher_id FROM class_teachers WHERE deleted_at IS NULL
                     ) AS assigned_classes
                     WHERE assigned_classes.teacher_id = teachers.id
                 ) AS class_count
          FROM teachers
-         WHERE teachers.teacher_code LIKE :teacher_code_search
+         WHERE teachers.deleted_at IS NULL
+           AND (
+            teachers.teacher_code LIKE :teacher_code_search
             OR teachers.full_name LIKE :full_name_search
             OR teachers.email LIKE :email_search
             OR teachers.specialization LIKE :specialization_search
+           )
          GROUP BY teachers.id
          ORDER BY teachers.created_at DESC, teachers.id DESC"
     );
@@ -384,13 +387,14 @@ if ($search !== '') {
                 (
                     SELECT COUNT(DISTINCT assigned_classes.class_id)
                     FROM (
-                        SELECT id AS class_id, teacher_id FROM classes WHERE teacher_id IS NOT NULL
+                        SELECT id AS class_id, teacher_id FROM classes WHERE teacher_id IS NOT NULL AND deleted_at IS NULL
                         UNION
-                        SELECT class_id, teacher_id FROM class_teachers
+                        SELECT class_id, teacher_id FROM class_teachers WHERE deleted_at IS NULL
                     ) AS assigned_classes
                     WHERE assigned_classes.teacher_id = teachers.id
                 ) AS class_count
          FROM teachers
+         WHERE teachers.deleted_at IS NULL
          GROUP BY teachers.id
          ORDER BY teachers.created_at DESC, teachers.id DESC'
     );
@@ -434,26 +438,7 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
 </head>
 <body class="dashboard-page">
   <div class="app-layout">
-    <aside class="sidebar">
-      <a class="sidebar-brand" href="dashboard.php">
-        <img src="images/kiwi-logo.png" alt="Kiwi Digital Tech Inc." class="brand-logo">
-        <span>
-          <strong>Kiwi Digital</strong>
-          <small>Learners Progress Monitoring System</small>
-        </span>
-      </a>
-      <nav class="sidebar-nav">
-        <a href="dashboard.php"><i class="fa-solid fa-gauge-high"></i> Dashboard</a>
-        <a href="classes.php"><i class="fa-solid fa-chalkboard-user"></i> Classes</a>
-        <a class="active" href="teachers.php"><i class="fa-solid fa-user-tie"></i> Teachers</a>
-        <a href="learners.php"><i class="fa-solid fa-users"></i> Learners</a>
-        <a href="grades.php"><i class="fa-solid fa-star"></i> Grades</a>
-      </nav>
-      <div class="sidebar-footer">
-        <p class="mb-1">Logged in as</p>
-        <strong><?php echo e($currentUser['name']); ?></strong>
-      </div>
-    </aside>
+    <?php $activeSidebarItem = 'teachers'; require __DIR__ . '/includes/admin_sidebar.php'; ?>
 
     <main class="main-panel">
       <header class="topbar">

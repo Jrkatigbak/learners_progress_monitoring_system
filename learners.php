@@ -146,7 +146,8 @@ function createTeacherFromLearner(PDO $pdo, string $fullName, string $email, str
              SET full_name = :full_name,
                  phone = :phone,
                  profile_photo = :profile_photo,
-                 status = :status
+                 status = :status,
+                 deleted_at = NULL
              WHERE id = :id'
         );
         $teacherStatement->execute([
@@ -178,7 +179,8 @@ function createTeacherFromLearner(PDO $pdo, string $fullName, string $email, str
          VALUES (:name, :email, :password_hash, 'teacher')
          ON DUPLICATE KEY UPDATE
             name = VALUES(name),
-            password_hash = VALUES(password_hash)"
+            password_hash = VALUES(password_hash),
+            deleted_at = NULL"
     );
     $userStatement->execute([
         'name' => $fullName,
@@ -194,7 +196,7 @@ function createTeacherFromLearner(PDO $pdo, string $fullName, string $email, str
 }
 
 if (isset($_GET['edit'])) {
-    $editStatement = $pdo->prepare('SELECT * FROM learners WHERE id = :id LIMIT 1');
+    $editStatement = $pdo->prepare('SELECT * FROM learners WHERE id = :id AND deleted_at IS NULL LIMIT 1');
     $editStatement->execute(['id' => (int) $_GET['edit']]);
     $editingLearner = $editStatement->fetch() ?: null;
 }
@@ -203,23 +205,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
 
     if ($action === 'delete') {
-        // Remove the learner row through POST so ordinary page visits cannot delete records.
-        $photoStatement = $pdo->prepare('SELECT email, profile_photo FROM learners WHERE id = :id LIMIT 1');
+        // Soft delete the learner row through POST so records remain recoverable.
+        $photoStatement = $pdo->prepare('SELECT email, profile_photo FROM learners WHERE id = :id AND deleted_at IS NULL LIMIT 1');
         $photoStatement->execute(['id' => (int) ($_POST['id'] ?? 0)]);
         $learnerToDelete = $photoStatement->fetch() ?: [];
         $emailToDelete = (string) ($learnerToDelete['email'] ?? '');
-        $photoToDelete = (string) ($learnerToDelete['profile_photo'] ?? '');
 
-        $deleteStatement = $pdo->prepare('DELETE FROM learners WHERE id = :id');
+        $deleteStatement = $pdo->prepare('UPDATE learners SET deleted_at = NOW(), status = "On Hold" WHERE id = :id AND deleted_at IS NULL');
         $deleteStatement->execute(['id' => (int) ($_POST['id'] ?? 0)]);
 
         if ($emailToDelete !== '') {
-            // Remove only learner-role accounts so an admin account is never deleted by accident.
-            $userDeleteStatement = $pdo->prepare("DELETE FROM users WHERE email = :email AND role = 'learner'");
+            // Hide only learner-role accounts so an admin account is never affected by accident.
+            $userDeleteStatement = $pdo->prepare("UPDATE users SET deleted_at = NOW() WHERE email = :email AND role = 'learner' AND deleted_at IS NULL");
             $userDeleteStatement->execute(['email' => $emailToDelete]);
         }
-
-        deleteLearnerPhoto($photoToDelete);
 
         header('Location: learners.php?success=deleted');
         exit;
@@ -382,7 +381,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                      VALUES (:name, :email, :password_hash, :role)
                      ON DUPLICATE KEY UPDATE
                         name = VALUES(name),
-                        password_hash = VALUES(password_hash)'
+                        password_hash = VALUES(password_hash),
+            deleted_at = NULL'
                 );
                 $userStatement->execute([
                     'name' => $fullName,
@@ -453,9 +453,12 @@ if ($search !== '') {
     $learnersStatement = $pdo->prepare(
         "SELECT learners.*
          FROM learners
-         WHERE learners.learner_number LIKE :learner_number_search
+         WHERE learners.deleted_at IS NULL
+           AND (
+            learners.learner_number LIKE :learner_number_search
             OR learners.first_name LIKE :first_name_search
             OR learners.last_name LIKE :last_name_search
+           )
          ORDER BY learners.created_at DESC, learners.id DESC"
     );
     $searchTerm = '%' . $search . '%';
@@ -468,6 +471,7 @@ if ($search !== '') {
     $learnersStatement = $pdo->query(
         'SELECT learners.*
          FROM learners
+         WHERE learners.deleted_at IS NULL
          ORDER BY learners.created_at DESC, learners.id DESC'
     );
 }
@@ -541,26 +545,7 @@ if ($errors) {
 </head>
 <body class="dashboard-page">
   <div class="app-layout">
-    <aside class="sidebar">
-      <a class="sidebar-brand" href="dashboard.php">
-        <img src="images/kiwi-logo.png" alt="Kiwi Digital Tech Inc." class="brand-logo">
-        <span>
-          <strong>Kiwi Digital</strong>
-          <!-- Keep the system name visible in the module navigation. -->
-          <small>Learners Progress Monitoring System</small>
-        </span>
-      </a>
-      <nav class="sidebar-nav">
-        <a href="dashboard.php"><i class="fa-solid fa-gauge-high"></i> Dashboard</a>
-        <a href="classes.php"><i class="fa-solid fa-chalkboard-user"></i> Classes</a>
-        <a href="teachers.php"><i class="fa-solid fa-user-tie"></i> Teachers</a>
-        <a class="active" href="learners.php"><i class="fa-solid fa-users"></i> Learners</a>
-      </nav>
-      <div class="sidebar-footer">
-        <p class="mb-1">Logged in as</p>
-        <strong><?php echo e($currentUser['name']); ?></strong>
-      </div>
-    </aside>
+    <?php $activeSidebarItem = 'learners'; require __DIR__ . '/includes/admin_sidebar.php'; ?>
 
     <main class="main-panel">
       <header class="topbar">

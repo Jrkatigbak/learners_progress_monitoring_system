@@ -24,15 +24,17 @@ function learnerCanOpenQuiz(PDO $pdo, int $learnerId, int $quizId): ?array
     $statement = $pdo->prepare(
         "SELECT class_quizzes.*, classes.class_name, classes.id AS class_id
          FROM class_quizzes
-         INNER JOIN classes ON classes.id = class_quizzes.class_id
-         INNER JOIN learners ON learners.id = :learner_id
-         LEFT JOIN courses ON courses.course_code = CONCAT('CLASS-', classes.id)
+         INNER JOIN classes ON classes.id = class_quizzes.class_id AND classes.deleted_at IS NULL
+         INNER JOIN learners ON learners.id = :learner_id AND learners.deleted_at IS NULL
+         LEFT JOIN courses ON courses.course_code = CONCAT('CLASS-', classes.id) AND courses.deleted_at IS NULL
          LEFT JOIN course_enrollments
            ON course_enrollments.course_id = courses.id
           AND course_enrollments.learner_id = learners.id
           AND course_enrollments.enrollment_status IN ('Enrolled', 'In Progress', 'Completed')
+          AND course_enrollments.deleted_at IS NULL
          WHERE class_quizzes.id = :quiz_id
            AND class_quizzes.status = 'Active'
+           AND class_quizzes.deleted_at IS NULL
            AND (
              learners.class_id = classes.id
              OR course_enrollments.id IS NOT NULL
@@ -57,6 +59,7 @@ $learnerStatement = $pdo->prepare(
     'SELECT id, learner_number, first_name, last_name, email, profile_photo
      FROM learners
      WHERE email = :email
+       AND deleted_at IS NULL
      LIMIT 1'
 );
 $learnerStatement->execute(['email' => $currentUser['email']]);
@@ -76,6 +79,7 @@ if ($learner && $quizId > 0) {
             'SELECT quiz_questions.*
              FROM quiz_questions
              WHERE quiz_questions.quiz_id = :quiz_id
+               AND quiz_questions.deleted_at IS NULL
              ORDER BY quiz_questions.position, quiz_questions.id'
         );
         $questionStatement->execute(['quiz_id' => $quizId]);
@@ -88,6 +92,7 @@ if ($learner && $quizId > 0) {
                 "SELECT *
                  FROM quiz_choices
                  WHERE question_id IN ({$placeholders})
+                   AND deleted_at IS NULL
                  ORDER BY position, id"
             );
             $choiceStatement->execute($questionIds);
@@ -102,7 +107,7 @@ if ($learner && $quizId > 0) {
             }
         }
 
-        $attemptStatement = $pdo->prepare('SELECT * FROM quiz_attempts WHERE quiz_id = :quiz_id AND learner_id = :learner_id LIMIT 1');
+        $attemptStatement = $pdo->prepare('SELECT * FROM quiz_attempts WHERE quiz_id = :quiz_id AND learner_id = :learner_id AND deleted_at IS NULL LIMIT 1');
         $attemptStatement->execute([
             'quiz_id' => $quizId,
             'learner_id' => (int) $learner['id'],
@@ -232,18 +237,21 @@ if ($learner && !$activeQuiz) {
                 quiz_attempts.submitted_at,
                 COUNT(quiz_questions.id) AS question_count
          FROM class_quizzes
-         INNER JOIN classes ON classes.id = class_quizzes.class_id
-         INNER JOIN learners ON learners.id = :learner_id
-         LEFT JOIN courses ON courses.course_code = CONCAT('CLASS-', classes.id)
+         INNER JOIN classes ON classes.id = class_quizzes.class_id AND classes.deleted_at IS NULL
+         INNER JOIN learners ON learners.id = :learner_id AND learners.deleted_at IS NULL
+         LEFT JOIN courses ON courses.course_code = CONCAT('CLASS-', classes.id) AND courses.deleted_at IS NULL
          LEFT JOIN course_enrollments
            ON course_enrollments.course_id = courses.id
           AND course_enrollments.learner_id = learners.id
           AND course_enrollments.enrollment_status IN ('Enrolled', 'In Progress', 'Completed')
+          AND course_enrollments.deleted_at IS NULL
          LEFT JOIN quiz_attempts
            ON quiz_attempts.quiz_id = class_quizzes.id
           AND quiz_attempts.learner_id = learners.id
-         LEFT JOIN quiz_questions ON quiz_questions.quiz_id = class_quizzes.id
+          AND quiz_attempts.deleted_at IS NULL
+         LEFT JOIN quiz_questions ON quiz_questions.quiz_id = class_quizzes.id AND quiz_questions.deleted_at IS NULL
          WHERE class_quizzes.status = 'Active'
+           AND class_quizzes.deleted_at IS NULL
            AND (
              learners.class_id = classes.id
              OR course_enrollments.id IS NOT NULL

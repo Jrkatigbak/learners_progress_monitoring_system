@@ -7,6 +7,10 @@ if (!$auth->isAdmin() && !$auth->isTeacher()) {
     exit;
 }
 
+if ($auth->isAdminSideUser() && !$auth->isTeacher()) {
+    kiwiRequirePermission($pdo, 'grades.manage');
+}
+
 // Reusable escaping helper for grade workflows.
 function e(string $value): string
 {
@@ -21,7 +25,7 @@ $showTaskModal = false;
 $showGradeModal = false;
 
 if ($isTeacher) {
-    $teacherStatement = $pdo->prepare('SELECT * FROM teachers WHERE email = :email LIMIT 1');
+    $teacherStatement = $pdo->prepare('SELECT * FROM teachers WHERE email = :email AND deleted_at IS NULL LIMIT 1');
     $teacherStatement->execute(['email' => $currentUser['email']]);
     $teacher = $teacherStatement->fetch() ?: null;
 
@@ -47,8 +51,9 @@ function canManageClass(PDO $pdo, bool $isTeacher, ?array $teacher, int $classId
     $statement = $pdo->prepare(
         'SELECT classes.id
          FROM classes
-         LEFT JOIN class_teachers ON class_teachers.class_id = classes.id
+         LEFT JOIN class_teachers ON class_teachers.class_id = classes.id AND class_teachers.deleted_at IS NULL
          WHERE classes.id = :class_id
+           AND classes.deleted_at IS NULL
            AND (classes.teacher_id = :teacher_id OR class_teachers.teacher_id = :assigned_teacher_id)
          LIMIT 1'
     );
@@ -129,7 +134,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         if (!$errors) {
-            $taskStatement = $pdo->prepare('SELECT id, task_title FROM class_tasks WHERE id = :task_id AND class_id = :class_id LIMIT 1');
+            $taskStatement = $pdo->prepare('SELECT id, task_title FROM class_tasks WHERE id = :task_id AND class_id = :class_id AND deleted_at IS NULL LIMIT 1');
             $taskStatement->execute([
                 'task_id' => $taskId,
                 'class_id' => $classId,
@@ -142,7 +147,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         if (!$errors) {
-            $learnerStatement = $pdo->prepare('SELECT id FROM learners WHERE id = :learner_id AND class_id = :class_id LIMIT 1');
+            $learnerStatement = $pdo->prepare('SELECT id FROM learners WHERE id = :learner_id AND class_id = :class_id AND deleted_at IS NULL LIMIT 1');
             $learnerStatement->execute([
                 'learner_id' => $learnerId,
                 'class_id' => $classId,
@@ -157,7 +162,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $teacherId = $isTeacher && $teacher ? (int) $teacher['id'] : null;
             // One task can receive one current score per learner; re-saving updates that score.
             $statement = $pdo->prepare(
-                'SELECT id FROM learner_grades WHERE task_id = :task_id AND learner_id = :learner_id LIMIT 1'
+                'SELECT id FROM learner_grades WHERE task_id = :task_id AND learner_id = :learner_id AND deleted_at IS NULL LIMIT 1'
             );
             $statement->execute([
                 'task_id' => $taskId,
@@ -218,9 +223,11 @@ if ($isTeacher && $teacher) {
     $classesStatement = $pdo->prepare(
         'SELECT classes.id, classes.class_name, classes.teacher
          FROM classes
-         LEFT JOIN class_teachers ON class_teachers.class_id = classes.id
-         WHERE classes.teacher_id = :teacher_id
+         LEFT JOIN class_teachers ON class_teachers.class_id = classes.id AND class_teachers.deleted_at IS NULL
+         WHERE classes.deleted_at IS NULL
+           AND (classes.teacher_id = :teacher_id
             OR class_teachers.teacher_id = :assigned_teacher_id
+           )
          GROUP BY classes.id
          ORDER BY class_name'
     );
@@ -230,7 +237,7 @@ if ($isTeacher && $teacher) {
     ]);
     $classes = $classesStatement->fetchAll();
 } else {
-    $classes = $pdo->query('SELECT id, class_name, teacher FROM classes ORDER BY class_name')->fetchAll();
+    $classes = $pdo->query('SELECT id, class_name, teacher FROM classes WHERE deleted_at IS NULL ORDER BY class_name')->fetchAll();
 }
 
 $defaultClassId = (int) ($_GET['class_id'] ?? ($_POST['class_id'] ?? 0));
@@ -252,14 +259,15 @@ $tasks = [];
 $learners = [];
 $grades = [];
 $averages = [];
-$teachers = $pdo->query("SELECT id, full_name FROM teachers WHERE status = 'Active' ORDER BY full_name")->fetchAll();
+$teachers = $pdo->query("SELECT id, full_name FROM teachers WHERE status = 'Active' AND deleted_at IS NULL ORDER BY full_name")->fetchAll();
 
 if ($selectedClass) {
     $tasksStatement = $pdo->prepare(
         'SELECT class_tasks.*, teachers.full_name AS teacher_name
          FROM class_tasks
-         LEFT JOIN teachers ON teachers.id = class_tasks.teacher_id
+         LEFT JOIN teachers ON teachers.id = class_tasks.teacher_id AND teachers.deleted_at IS NULL
          WHERE class_tasks.class_id = :class_id
+           AND class_tasks.deleted_at IS NULL
          ORDER BY class_tasks.task_date DESC, class_tasks.id DESC'
     );
     $tasksStatement->execute(['class_id' => $defaultClassId]);
@@ -269,6 +277,7 @@ if ($selectedClass) {
         'SELECT id, class_id, learner_number, first_name, last_name
          FROM learners
          WHERE class_id = :class_id
+           AND deleted_at IS NULL
          ORDER BY first_name, last_name'
     );
     $learnersStatement->execute(['class_id' => $defaultClassId]);
@@ -282,10 +291,11 @@ if ($selectedClass) {
                 class_tasks.task_title,
                 teachers.full_name AS teacher_name
          FROM learner_grades
-         INNER JOIN learners ON learners.id = learner_grades.learner_id
-         LEFT JOIN class_tasks ON class_tasks.id = learner_grades.task_id
-         LEFT JOIN teachers ON teachers.id = learner_grades.teacher_id
+         INNER JOIN learners ON learners.id = learner_grades.learner_id AND learners.deleted_at IS NULL
+         LEFT JOIN class_tasks ON class_tasks.id = learner_grades.task_id AND class_tasks.deleted_at IS NULL
+         LEFT JOIN teachers ON teachers.id = learner_grades.teacher_id AND teachers.deleted_at IS NULL
          WHERE learner_grades.class_id = :class_id
+           AND learner_grades.deleted_at IS NULL
          ORDER BY learner_grades.graded_at DESC, learner_grades.id DESC'
     );
     $gradesStatement->execute(['class_id' => $defaultClassId]);
@@ -302,7 +312,9 @@ if ($selectedClass) {
          LEFT JOIN learner_grades
            ON learner_grades.learner_id = learners.id
           AND learner_grades.class_id = learners.class_id
+          AND learner_grades.deleted_at IS NULL
          WHERE learners.class_id = :class_id
+           AND learners.deleted_at IS NULL
          GROUP BY learners.id, learners.learner_number, learners.first_name, learners.last_name
          ORDER BY learners.first_name, learners.last_name'
     );
@@ -320,43 +332,40 @@ $successMessages = [
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Kiwi Digital | Grades</title>
-  <link rel="icon" type="image/png" href="images/kiwi-logo.png">
-  <link rel="apple-touch-icon" href="images/kiwi-logo.png">
+  <title><?php echo e(kiwiSystemBrandName()); ?> | Grades</title>
+  <link rel="icon" type="image/png" href="<?php echo e(kiwiSystemLogo()); ?>">
+  <link rel="apple-touch-icon" href="<?php echo e(kiwiSystemLogo()); ?>">
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
   <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" rel="stylesheet">
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
   <link href="css/style.css" rel="stylesheet">
+  <?php echo kiwiSystemThemeStyle(); ?>
 </head>
 <body class="dashboard-page">
   <div class="app-layout">
-    <aside class="sidebar">
-      <a class="sidebar-brand" href="<?php echo $isTeacher ? 'teacher_dashboard.php' : 'dashboard.php'; ?>">
-        <img src="images/kiwi-logo.png" alt="Kiwi Digital Tech Inc." class="brand-logo">
-        <span>
-          <strong>Kiwi Digital</strong>
-          <small>Learners Progress Monitoring System</small>
-        </span>
-      </a>
-      <nav class="sidebar-nav">
-        <?php if ($isTeacher): ?>
+    <?php if ($isTeacher): ?>
+      <aside class="sidebar">
+        <a class="sidebar-brand" href="teacher_dashboard.php">
+          <img src="<?php echo e(kiwiSystemLogo()); ?>" alt="<?php echo e(kiwiSystemBrandName()); ?>" class="brand-logo">
+          <span>
+            <strong><?php echo e(kiwiSystemBrandName()); ?></strong>
+            <small><?php echo e(kiwiSystemName()); ?></small>
+          </span>
+        </a>
+        <nav class="sidebar-nav">
           <a href="teacher_dashboard.php"><i class="fa-solid fa-gauge-high"></i> Dashboard</a>
           <a class="active" href="grades.php"><i class="fa-solid fa-star"></i> Grades</a>
-        <?php else: ?>
-          <a href="dashboard.php"><i class="fa-solid fa-gauge-high"></i> Dashboard</a>
-          <a href="classes.php"><i class="fa-solid fa-chalkboard-user"></i> Classes</a>
-          <a href="teachers.php"><i class="fa-solid fa-user-tie"></i> Teachers</a>
-          <a href="learners.php"><i class="fa-solid fa-users"></i> Learners</a>
-          <a href="grades.php" class="active"><i class="fa-solid fa-star"></i> Grades</a>
-        <?php endif; ?>
-      </nav>
-      <div class="sidebar-footer">
-        <p class="mb-1">Logged in as</p>
-        <strong><?php echo e($currentUser['name']); ?></strong>
-      </div>
-    </aside>
+        </nav>
+        <div class="sidebar-footer">
+          <p class="mb-1">Logged in as</p>
+          <strong><?php echo e($currentUser['name']); ?></strong>
+        </div>
+      </aside>
+    <?php else: ?>
+      <?php $activeSidebarItem = 'grades'; require __DIR__ . '/includes/admin_sidebar.php'; ?>
+    <?php endif; ?>
 
     <main class="main-panel">
       <header class="topbar">

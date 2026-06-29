@@ -1,6 +1,9 @@
 <?php
 
 require_once __DIR__ . '/includes/admin_guard.php';
+require_once __DIR__ . '/includes/enrollment_helpers.php';
+
+kiwiRequirePermission($pdo, 'classes.manage');
 
 // Reusable escaping helper for table and form output.
 function e(string $value): string
@@ -41,7 +44,7 @@ function deleteClassBanner(string $bannerPath): void
 function normalizeClassSortOrder(PDO $pdo): void
 {
     // Keep class ordering compact so up/down swaps stay predictable after deletes or old rows.
-    $classRows = $pdo->query('SELECT id FROM classes ORDER BY sort_order ASC, created_at DESC, id DESC')->fetchAll();
+    $classRows = $pdo->query('SELECT id FROM classes WHERE deleted_at IS NULL ORDER BY sort_order ASC, created_at DESC, id DESC')->fetchAll();
     $orderStatement = $pdo->prepare('UPDATE classes SET sort_order = :sort_order WHERE id = :id');
 
     foreach ($classRows as $index => $classRow) {
@@ -52,8 +55,22 @@ function normalizeClassSortOrder(PDO $pdo): void
     }
 }
 
+function ensureClassEnrollmentTokens(PDO $pdo): void
+{
+    // Older classes created before public enrollment links need a token before their cards can share a URL.
+    $missingTokenRows = $pdo->query('SELECT id FROM classes WHERE deleted_at IS NULL AND (enrollment_token IS NULL OR enrollment_token = "")')->fetchAll();
+    $updateStatement = $pdo->prepare('UPDATE classes SET enrollment_token = :enrollment_token WHERE id = :id');
+
+    foreach ($missingTokenRows as $classRow) {
+        $updateStatement->execute([
+            'enrollment_token' => kiwiGenerateUniqueToken($pdo, 'classes', 'enrollment_token'),
+            'id' => (int) $classRow['id'],
+        ]);
+    }
+}
+
 if (isset($_GET['edit'])) {
-    $editStatement = $pdo->prepare('SELECT * FROM classes WHERE id = :id LIMIT 1');
+    $editStatement = $pdo->prepare('SELECT * FROM classes WHERE id = :id AND deleted_at IS NULL LIMIT 1');
     $editStatement->execute(['id' => (int) $_GET['edit']]);
     $editingClass = $editStatement->fetch() ?: null;
 }
@@ -62,14 +79,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
 
     if ($action === 'delete') {
-        $bannerStatement = $pdo->prepare('SELECT banner_image FROM classes WHERE id = :id LIMIT 1');
+        $bannerStatement = $pdo->prepare('SELECT banner_image FROM classes WHERE id = :id AND deleted_at IS NULL LIMIT 1');
         $bannerStatement->execute(['id' => (int) ($_POST['id'] ?? 0)]);
-        $bannerToDelete = (string) ($bannerStatement->fetchColumn() ?: '');
 
-        // Delete stays as a POST action so a simple page visit cannot remove data.
-        $deleteStatement = $pdo->prepare('DELETE FROM classes WHERE id = :id');
-        $deleteStatement->execute(['id' => (int) ($_POST['id'] ?? 0)]);
-        deleteClassBanner($bannerToDelete);
+        // Deleting a class now hides it while keeping the row for audit/history.
+        $classIdToDelete = (int) ($_POST['id'] ?? 0);
+        $deleteStatement = $pdo->prepare('UPDATE classes SET deleted_at = NOW(), status = "Inactive" WHERE id = :id AND deleted_at IS NULL');
+        $deleteStatement->execute(['id' => $classIdToDelete]);
+        $courseDeleteStatement = $pdo->prepare('UPDATE courses SET deleted_at = NOW(), status = "Inactive" WHERE course_code = :course_code AND deleted_at IS NULL');
+        $courseDeleteStatement->execute(['course_code' => 'CLASS-' . $classIdToDelete]);
         normalizeClassSortOrder($pdo);
 
         header('Location: classes.php?success=deleted');
@@ -81,15 +99,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         $classId = (int) ($_POST['id'] ?? 0);
         $direction = $_POST['direction'] ?? '';
-        $classStatement = $pdo->prepare('SELECT id, sort_order FROM classes WHERE id = :id LIMIT 1');
+        $classStatement = $pdo->prepare('SELECT id, sort_order FROM classes WHERE id = :id AND deleted_at IS NULL LIMIT 1');
         $classStatement->execute(['id' => $classId]);
         $classToMove = $classStatement->fetch() ?: null;
 
         if ($classToMove && in_array($direction, ['up', 'down'], true)) {
             // Swap with the nearest class in the requested direction for a predictable manual order.
             $neighborSql = $direction === 'up'
-                ? 'SELECT id, sort_order FROM classes WHERE sort_order < :sort_order ORDER BY sort_order DESC, id DESC LIMIT 1'
-                : 'SELECT id, sort_order FROM classes WHERE sort_order > :sort_order ORDER BY sort_order ASC, id ASC LIMIT 1';
+                ? 'SELECT id, sort_order FROM classes WHERE deleted_at IS NULL AND sort_order < :sort_order ORDER BY sort_order DESC, id DESC LIMIT 1'
+                : 'SELECT id, sort_order FROM classes WHERE deleted_at IS NULL AND sort_order > :sort_order ORDER BY sort_order ASC, id ASC LIMIT 1';
             $neighborStatement = $pdo->prepare($neighborSql);
             $neighborStatement->execute(['sort_order' => (int) $classToMove['sort_order']]);
             $neighbor = $neighborStatement->fetch() ?: null;
@@ -190,14 +208,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         // Create a new class record from the Add Class form.
-        $nextSortOrder = (int) $pdo->query('SELECT COALESCE(MAX(sort_order), 0) + 1 FROM classes')->fetchColumn();
+        $nextSortOrder = (int) $pdo->query('SELECT COALESCE(MAX(sort_order), 0) + 1 FROM classes WHERE deleted_at IS NULL')->fetchColumn();
         $statement = $pdo->prepare(
-            'INSERT INTO classes (class_name, teacher_id, teacher, banner_image, status, description, sort_order)
-             VALUES (:class_name, NULL, :teacher, :banner_image, :status, :description, :sort_order)'
+            'INSERT INTO classes (class_name, teacher_id, teacher, enrollment_token, banner_image, status, description, sort_order)
+             VALUES (:class_name, NULL, :teacher, :enrollment_token, :banner_image, :status, :description, :sort_order)'
         );
         $statement->execute([
             'class_name' => $className,
             'teacher' => '',
+            'enrollment_token' => kiwiGenerateUniqueToken($pdo, 'classes', 'enrollment_token'),
             'banner_image' => $bannerImage !== '' ? $bannerImage : null,
             'status' => $status,
             'description' => $description !== '' ? $description : null,
@@ -218,6 +237,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 normalizeClassSortOrder($pdo);
+ensureClassEnrollmentTokens($pdo);
 
 if ($search !== '') {
     // Search keeps the class list focused without changing the add/edit modal state.
@@ -229,13 +249,48 @@ if ($search !== '') {
                         FROM class_teachers
                         INNER JOIN teachers AS assigned_teachers ON assigned_teachers.id = class_teachers.teacher_id
                         WHERE class_teachers.class_id = classes.id
+                          AND class_teachers.deleted_at IS NULL
+                          AND assigned_teachers.deleted_at IS NULL
                     ),
                     teachers.full_name,
                     classes.teacher
                 ) AS display_teacher
+                ,
+                (
+                    SELECT COUNT(DISTINCT assigned_teachers.id)
+                    FROM class_teachers
+                    INNER JOIN teachers AS assigned_teachers ON assigned_teachers.id = class_teachers.teacher_id
+                    WHERE class_teachers.class_id = classes.id
+                      AND class_teachers.deleted_at IS NULL
+                      AND assigned_teachers.deleted_at IS NULL
+                ) + CASE WHEN classes.teacher_id IS NOT NULL AND teachers.deleted_at IS NULL THEN 1 ELSE 0 END AS teacher_count,
+                (
+                    SELECT COUNT(DISTINCT learners.id)
+                    FROM learners
+                    LEFT JOIN course_enrollments
+                      ON course_enrollments.learner_id = learners.id
+                     AND course_enrollments.deleted_at IS NULL
+                    LEFT JOIN courses
+                      ON courses.id = course_enrollments.course_id
+                     AND courses.deleted_at IS NULL
+                    WHERE learners.deleted_at IS NULL
+                      AND (
+                        learners.class_id = classes.id
+                        OR courses.course_code = CONCAT('CLASS-', classes.id)
+                      )
+                ) AS learner_count,
+                (
+                    SELECT COUNT(*)
+                    FROM class_enrollment_requests
+                    WHERE class_enrollment_requests.class_id = classes.id
+                      AND class_enrollment_requests.status = 'Pending'
+                      AND class_enrollment_requests.deleted_at IS NULL
+                ) AS pending_enrollment_count
          FROM classes
          LEFT JOIN teachers ON teachers.id = classes.teacher_id
-         WHERE classes.class_name LIKE :class_name_search
+         WHERE classes.deleted_at IS NULL
+           AND (
+            classes.class_name LIKE :class_name_search
             OR classes.teacher LIKE :teacher_search
             OR teachers.full_name LIKE :teacher_master_search
             OR EXISTS (
@@ -247,6 +302,7 @@ if ($search !== '') {
             )
             OR classes.status LIKE :status_search
             OR classes.description LIKE :description_search
+           )
          ORDER BY classes.sort_order ASC, classes.created_at DESC, classes.id DESC"
     );
     $searchTerm = '%' . $search . '%';
@@ -267,12 +323,46 @@ if ($search !== '') {
                         FROM class_teachers
                         INNER JOIN teachers AS assigned_teachers ON assigned_teachers.id = class_teachers.teacher_id
                         WHERE class_teachers.class_id = classes.id
+                          AND class_teachers.deleted_at IS NULL
+                          AND assigned_teachers.deleted_at IS NULL
                     ),
                     teachers.full_name,
                     classes.teacher
                 ) AS display_teacher
+                ,
+                (
+                    SELECT COUNT(DISTINCT assigned_teachers.id)
+                    FROM class_teachers
+                    INNER JOIN teachers AS assigned_teachers ON assigned_teachers.id = class_teachers.teacher_id
+                    WHERE class_teachers.class_id = classes.id
+                      AND class_teachers.deleted_at IS NULL
+                      AND assigned_teachers.deleted_at IS NULL
+                ) + CASE WHEN classes.teacher_id IS NOT NULL AND teachers.deleted_at IS NULL THEN 1 ELSE 0 END AS teacher_count,
+                (
+                    SELECT COUNT(DISTINCT learners.id)
+                    FROM learners
+                    LEFT JOIN course_enrollments
+                      ON course_enrollments.learner_id = learners.id
+                     AND course_enrollments.deleted_at IS NULL
+                    LEFT JOIN courses
+                      ON courses.id = course_enrollments.course_id
+                     AND courses.deleted_at IS NULL
+                    WHERE learners.deleted_at IS NULL
+                      AND (
+                        learners.class_id = classes.id
+                        OR courses.course_code = CONCAT("CLASS-", classes.id)
+                      )
+                ) AS learner_count,
+                (
+                    SELECT COUNT(*)
+                    FROM class_enrollment_requests
+                    WHERE class_enrollment_requests.class_id = classes.id
+                      AND class_enrollment_requests.status = "Pending"
+                      AND class_enrollment_requests.deleted_at IS NULL
+                ) AS pending_enrollment_count
          FROM classes
          LEFT JOIN teachers ON teachers.id = classes.teacher_id
+         WHERE classes.deleted_at IS NULL
          ORDER BY classes.sort_order ASC, classes.created_at DESC, classes.id DESC'
     );
 }
@@ -297,39 +387,20 @@ $successMessages = [
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Kiwi Digital | Classes</title>
-  <link rel="icon" type="image/png" href="images/kiwi-logo.png">
-  <link rel="apple-touch-icon" href="images/kiwi-logo.png">
+  <title><?php echo e(kiwiSystemBrandName()); ?> | Classes</title>
+  <link rel="icon" type="image/png" href="<?php echo e(kiwiSystemLogo()); ?>">
+  <link rel="apple-touch-icon" href="<?php echo e(kiwiSystemLogo()); ?>">
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
   <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" rel="stylesheet">
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
   <link href="css/style.css?v=class-reorder-controls" rel="stylesheet">
+  <?php echo kiwiSystemThemeStyle(); ?>
 </head>
 <body class="dashboard-page">
   <div class="app-layout">
-    <aside class="sidebar">
-      <a class="sidebar-brand" href="dashboard.php">
-        <img src="images/kiwi-logo.png" alt="Kiwi Digital Tech Inc." class="brand-logo">
-        <span>
-          <strong>Kiwi Digital</strong>
-          <!-- Keep the system name visible in the module navigation. -->
-          <small>Learners Progress Monitoring System</small>
-        </span>
-      </a>
-      <nav class="sidebar-nav">
-        <a href="dashboard.php"><i class="fa-solid fa-gauge-high"></i> Dashboard</a>
-        <a class="active" href="classes.php"><i class="fa-solid fa-chalkboard-user"></i> Classes</a>
-        <a href="teachers.php"><i class="fa-solid fa-user-tie"></i> Teachers</a>
-        <a href="learners.php"><i class="fa-solid fa-users"></i> Learners</a>
-        <a href="grades.php"><i class="fa-solid fa-star"></i> Grades</a>
-      </nav>
-      <div class="sidebar-footer">
-        <p class="mb-1">Logged in as</p>
-        <strong><?php echo e($currentUser['name']); ?></strong>
-      </div>
-    </aside>
+    <?php $activeSidebarItem = 'classes'; require __DIR__ . '/includes/admin_sidebar.php'; ?>
 
     <main class="main-panel">
       <header class="topbar">
@@ -338,7 +409,7 @@ $successMessages = [
         </button>
         <div>
           <!-- Repeat the system name for clear module context. -->
-          <p class="eyebrow mb-1">Learners Progress Monitoring System</p>
+          <p class="eyebrow mb-1"><?php echo e(kiwiSystemName()); ?></p>
           <h1 class="h3 mb-0">Classes</h1>
         </div>
         <button class="theme-toggle ms-auto" id="themeToggle" type="button" aria-label="Switch to dark mode" aria-pressed="false">
@@ -402,6 +473,7 @@ $successMessages = [
             <div class="class-card-grid">
               <?php foreach ($classRows as $classIndex => $classRow): ?>
                 <article class="class-card">
+                  <?php $enrollmentLink = kiwiEnrollmentUrl((string) $classRow['enrollment_token']); ?>
                   <a class="class-card-open-link" href="class_workspace.php?class_id=<?php echo (int) $classRow['id']; ?>&tool=dashboard" aria-label="Open <?php echo e($classRow['class_name']); ?>">
                     <div class="class-wallpaper">
                       <?php if (!empty($classRow['banner_image'])): ?>
@@ -417,9 +489,17 @@ $successMessages = [
                     </div>
                     <div class="class-card-body">
                       <h3><?php echo e($classRow['class_name']); ?></h3>
-                      <p class="class-teacher"><i class="fa-solid fa-user-tie"></i><?php echo e(($classRow['display_teacher'] ?? '') !== '' ? $classRow['display_teacher'] : 'No teacher assigned'); ?></p>
+                      <div class="class-stat-badges">
+                        <span><i class="fa-solid fa-user-tie"></i><?php echo (int) ($classRow['teacher_count'] ?? 0); ?> teacher<?php echo (int) ($classRow['teacher_count'] ?? 0) === 1 ? '' : 's'; ?></span>
+                        <span><i class="fa-solid fa-users"></i><?php echo (int) ($classRow['learner_count'] ?? 0); ?> learner<?php echo (int) ($classRow['learner_count'] ?? 0) === 1 ? '' : 's'; ?></span>
+                      </div>
                       <?php if (!empty($classRow['description'])): ?>
                         <p class="class-description"><?php echo e($classRow['description']); ?></p>
+                      <?php endif; ?>
+                      <?php if ((int) ($classRow['pending_enrollment_count'] ?? 0) > 0): ?>
+                        <p class="class-description text-primary fw-bold mt-2">
+                          <i class="fa-solid fa-user-clock me-1"></i><?php echo (int) $classRow['pending_enrollment_count']; ?> pending registration<?php echo (int) $classRow['pending_enrollment_count'] === 1 ? '' : 's'; ?>
+                        </p>
                       <?php endif; ?>
                     </div>
                   </a>
@@ -447,6 +527,12 @@ $successMessages = [
                     <a class="btn btn-sm btn-primary" href="class_workspace.php?class_id=<?php echo (int) $classRow['id']; ?>&tool=dashboard">
                       <i class="fa-solid fa-folder-open me-2"></i>Open Class
                     </a>
+                    <a class="btn btn-sm btn-outline-primary" href="<?php echo e($enrollmentLink); ?>" target="_blank" rel="noopener">
+                      <i class="fa-solid fa-link me-2"></i>Enroll Link
+                    </a>
+                    <button type="button" class="learner-icon-button copy-enrollment-link" data-link="<?php echo e($enrollmentLink); ?>" aria-label="Copy enrollment link" title="Copy enrollment link">
+                      <i class="fa-solid fa-copy"></i>
+                    </button>
                     <a class="learner-icon-button" href="classes.php?edit=<?php echo (int) $classRow['id']; ?>" aria-label="Edit class">
                       <i class="fa-solid fa-pen"></i>
                     </a>
@@ -518,6 +604,7 @@ $successMessages = [
 
   <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
   <?php if ($errors || (int) $formClass['id'] > 0): ?>
     <script>
       window.addEventListener('DOMContentLoaded', function () {

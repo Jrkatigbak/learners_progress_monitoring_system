@@ -8,7 +8,7 @@ function e(string $value): string
     return htmlspecialchars($value, ENT_QUOTES, 'UTF-8');
 }
 
-$teacherStatement = $pdo->prepare('SELECT * FROM teachers WHERE email = :email LIMIT 1');
+$teacherStatement = $pdo->prepare('SELECT * FROM teachers WHERE email = :email AND deleted_at IS NULL LIMIT 1');
 $teacherStatement->execute(['email' => $currentUser['email']]);
 $teacher = $teacherStatement->fetch() ?: null;
 
@@ -21,10 +21,12 @@ if ($teacher) {
         "SELECT classes.*,
                 COUNT(DISTINCT learners.id) AS learner_count
          FROM classes
-         LEFT JOIN class_teachers ON class_teachers.class_id = classes.id
-         LEFT JOIN learners ON learners.class_id = classes.id
-         WHERE classes.teacher_id = :teacher_id
+         LEFT JOIN class_teachers ON class_teachers.class_id = classes.id AND class_teachers.deleted_at IS NULL
+         LEFT JOIN learners ON learners.class_id = classes.id AND learners.deleted_at IS NULL
+         WHERE classes.deleted_at IS NULL
+           AND (classes.teacher_id = :teacher_id
             OR class_teachers.teacher_id = :assigned_teacher_id
+           )
          GROUP BY classes.id
          ORDER BY classes.class_name"
     );
@@ -39,9 +41,12 @@ if ($teacher) {
                 classes.class_name
          FROM learners
          INNER JOIN classes ON classes.id = learners.class_id
-         LEFT JOIN class_teachers ON class_teachers.class_id = classes.id
-         WHERE classes.teacher_id = :teacher_id
+         LEFT JOIN class_teachers ON class_teachers.class_id = classes.id AND class_teachers.deleted_at IS NULL
+         WHERE classes.deleted_at IS NULL
+           AND learners.deleted_at IS NULL
+           AND (classes.teacher_id = :teacher_id
             OR class_teachers.teacher_id = :assigned_teacher_id
+           )
          ORDER BY classes.class_name, learners.first_name, learners.last_name"
     );
     $learnersStatement->execute([
@@ -59,9 +64,13 @@ if ($teacher) {
          FROM learner_grades
          INNER JOIN learners ON learners.id = learner_grades.learner_id
          INNER JOIN classes ON classes.id = learner_grades.class_id
-         LEFT JOIN class_teachers ON class_teachers.class_id = classes.id
-         WHERE classes.teacher_id = :teacher_id
+         LEFT JOIN class_teachers ON class_teachers.class_id = classes.id AND class_teachers.deleted_at IS NULL
+         WHERE classes.deleted_at IS NULL
+           AND learners.deleted_at IS NULL
+           AND learner_grades.deleted_at IS NULL
+           AND (classes.teacher_id = :teacher_id
             OR class_teachers.teacher_id = :assigned_teacher_id
+           )
          ORDER BY learner_grades.graded_at DESC, learner_grades.id DESC
          LIMIT 6"
     );
@@ -88,7 +97,7 @@ $initials = strtoupper(substr($teacherName, 0, 1));
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css" rel="stylesheet">
+  <link href="css/style.css?v=teacher-profile-courses" rel="stylesheet">
 </head>
 <body class="dashboard-page">
   <div class="app-layout">
@@ -117,7 +126,7 @@ $initials = strtoupper(substr($teacherName, 0, 1));
         </button>
         <div>
           <p class="eyebrow mb-1">Teacher Portal</p>
-          <h1 class="h3 mb-0">Assigned Classes</h1>
+          <h1 class="h3 mb-0">Teacher Profile</h1>
         </div>
         <button class="theme-toggle ms-auto" id="themeToggle" type="button" aria-label="Switch to dark mode" aria-pressed="false">
           <i class="fa-solid fa-moon"></i>
@@ -152,6 +161,76 @@ $initials = strtoupper(substr($teacherName, 0, 1));
             <p>Your login is not linked to a teacher profile yet.</p>
           </div>
         <?php else: ?>
+          <div class="teacher-profile-layout mb-4">
+            <section class="panel-card teacher-profile-summary-card">
+              <span class="section-kicker">Teacher Profile</span>
+              <div class="teacher-profile-header">
+                <div class="teacher-profile-photo">
+                  <?php if (!empty($teacher['profile_photo'])): ?>
+                    <img src="<?php echo e($teacher['profile_photo']); ?>" alt="<?php echo e($teacherName); ?> profile picture">
+                  <?php else: ?>
+                    <span><?php echo e($initials); ?></span>
+                  <?php endif; ?>
+                </div>
+                <div>
+                  <h2><?php echo e($teacherName); ?></h2>
+                  <p><?php echo e((string) ($teacher['specialization'] ?: 'Teacher')); ?></p>
+                </div>
+              </div>
+              <div class="teacher-profile-meta">
+                <?php if (!empty($teacher['teacher_code'])): ?>
+                  <span><i class="fa-solid fa-id-badge"></i><?php echo e($teacher['teacher_code']); ?></span>
+                <?php endif; ?>
+                <span><i class="fa-solid fa-envelope"></i><?php echo e($teacher['email']); ?></span>
+                <?php if (!empty($teacher['phone'])): ?>
+                  <span><i class="fa-solid fa-phone"></i><?php echo e($teacher['phone']); ?></span>
+                <?php endif; ?>
+              </div>
+            </section>
+
+            <section class="panel-card teacher-assigned-courses-card">
+              <div class="d-flex flex-wrap align-items-start justify-content-between gap-3 mb-3">
+                <div>
+                  <span class="section-kicker">Assigned Courses</span>
+                  <h2 class="h5 mb-1">Courses you can enter</h2>
+                  <p class="text-secondary mb-0">Open any course assigned to your teacher profile.</p>
+                </div>
+                <span class="badge text-bg-primary"><?php echo count($classes); ?> courses</span>
+              </div>
+
+              <?php if (!$classes): ?>
+                <div class="empty-state teacher-course-empty">
+                  <i class="fa-solid fa-folder-open"></i>
+                  <p>No courses have been assigned to you yet.</p>
+                </div>
+              <?php else: ?>
+                <div class="teacher-course-list">
+                  <?php foreach ($classes as $class): ?>
+                    <a class="teacher-course-row" href="class_workspace.php?class_id=<?php echo (int) $class['id']; ?>&tool=dashboard">
+                      <span class="teacher-course-thumb">
+                        <?php if (!empty($class['banner_image'])): ?>
+                          <img src="<?php echo e($class['banner_image']); ?>" alt="<?php echo e($class['class_name']); ?> wallpaper">
+                        <?php else: ?>
+                          <i class="fa-solid fa-chalkboard-user"></i>
+                        <?php endif; ?>
+                      </span>
+                      <span class="teacher-course-copy">
+                        <strong><?php echo e($class['class_name']); ?></strong>
+                        <small><i class="fa-solid fa-users"></i><?php echo (int) $class['learner_count']; ?> learners</small>
+                        <?php if (!empty($class['description'])): ?>
+                          <em><?php echo e($class['description']); ?></em>
+                        <?php endif; ?>
+                      </span>
+                      <span class="btn btn-sm btn-primary teacher-course-enter">
+                        <i class="fa-solid fa-door-open me-2"></i>Enter Course
+                      </span>
+                    </a>
+                  <?php endforeach; ?>
+                </div>
+              <?php endif; ?>
+            </section>
+          </div>
+
           <div class="row g-4 mb-4">
             <div class="col-md-6 col-xl-3">
               <div class="metric-card">

@@ -2,6 +2,7 @@
 
 require_once __DIR__ . '/includes/auth_guard.php';
 require_once __DIR__ . '/classes/SmtpMailer.php';
+require_once __DIR__ . '/includes/enrollment_helpers.php';
 
 $mailerConfig = require __DIR__ . '/config/Mailer.php';
 
@@ -120,6 +121,122 @@ function sendClassLearnerCredentialEmail(SmtpMailer $mailer, string $email, stri
     return $mailer->send($email, $name, $subject, $htmlBody, $textBody);
 }
 
+function approveClassEnrollmentRequest(PDO $pdo, array $request, int $courseId, int $adminUserId, string $password): int
+{
+    $fullName = kiwiEnrollmentName($request);
+    $existingLearnerStatement = $pdo->prepare('SELECT id, class_id FROM learners WHERE email = :email AND deleted_at IS NULL LIMIT 1');
+    $existingLearnerStatement->execute(['email' => $request['email']]);
+    $existingLearner = $existingLearnerStatement->fetch() ?: null;
+    $learnerId = (int) ($existingLearner['id'] ?? 0);
+
+    if ($learnerId > 0) {
+        $otherClassStatement = $pdo->prepare(
+            'SELECT COUNT(*)
+             FROM course_enrollments
+             INNER JOIN courses ON courses.id = course_enrollments.course_id
+             WHERE course_enrollments.learner_id = :learner_id
+               AND course_enrollments.course_id <> :course_id
+               AND course_enrollments.deleted_at IS NULL
+               AND courses.deleted_at IS NULL'
+        );
+        $otherClassStatement->execute([
+            'learner_id' => $learnerId,
+            'course_id' => $courseId,
+        ]);
+
+        // Learners are exclusive to one class, so block approvals for emails already linked elsewhere.
+        $legacyClassId = (int) ($existingLearner['class_id'] ?? 0);
+        if ((int) $otherClassStatement->fetchColumn() > 0 || ($legacyClassId > 0 && $legacyClassId !== (int) $request['class_id'])) {
+            throw new RuntimeException('Learner already belongs to another class.');
+        }
+
+        // Keep the learner master record current when the same email is approved for this class.
+        $learnerUpdate = $pdo->prepare(
+            'UPDATE learners
+             SET first_name = :first_name,
+                 middle_name = :middle_name,
+                 last_name = :last_name,
+                 phone = :phone,
+                 status = "Active"
+             WHERE id = :id'
+        );
+        $learnerUpdate->execute([
+            'first_name' => $request['first_name'],
+            'middle_name' => $request['middle_name'] !== '' ? $request['middle_name'] : null,
+            'last_name' => $request['last_name'],
+            'phone' => $request['contact_number'] !== '' ? $request['contact_number'] : null,
+            'id' => $learnerId,
+        ]);
+    } else {
+        $learnerInsert = $pdo->prepare(
+            'INSERT INTO learners
+                (learner_number, first_name, middle_name, last_name, email, phone, status)
+             VALUES
+                (:learner_number, :first_name, :middle_name, :last_name, :email, :phone, "Active")'
+        );
+        $learnerInsert->execute([
+            'learner_number' => kiwiGenerateLearnerNumber($pdo),
+            'first_name' => $request['first_name'],
+            'middle_name' => $request['middle_name'] !== '' ? $request['middle_name'] : null,
+            'last_name' => $request['last_name'],
+            'email' => $request['email'],
+            'phone' => $request['contact_number'] !== '' ? $request['contact_number'] : null,
+        ]);
+        $learnerId = (int) $pdo->lastInsertId();
+    }
+
+    $userStatement = $pdo->prepare(
+        'INSERT INTO users (name, email, password_hash, role)
+         VALUES (:name, :email, :password_hash, "learner")
+         ON DUPLICATE KEY UPDATE
+            name = VALUES(name),
+            password_hash = VALUES(password_hash),
+            deleted_at = NULL'
+    );
+    $userStatement->execute([
+        'name' => $fullName,
+        'email' => $request['email'],
+        'password_hash' => password_hash($password, PASSWORD_DEFAULT),
+    ]);
+
+    $enrollmentLookup = $pdo->prepare('SELECT id FROM course_enrollments WHERE learner_id = :learner_id AND course_id = :course_id AND deleted_at IS NULL LIMIT 1');
+    $enrollmentLookup->execute([
+        'learner_id' => $learnerId,
+        'course_id' => $courseId,
+    ]);
+    $existingEnrollmentId = (int) $enrollmentLookup->fetchColumn();
+
+    if ($existingEnrollmentId > 0) {
+        $enrollmentUpdate = $pdo->prepare('UPDATE course_enrollments SET enrollment_status = "Enrolled" WHERE id = :id');
+        $enrollmentUpdate->execute(['id' => $existingEnrollmentId]);
+    } else {
+        $enrollmentInsert = $pdo->prepare(
+            'INSERT INTO course_enrollments (learner_id, course_id, enrollment_status)
+             VALUES (:learner_id, :course_id, "Enrolled")'
+        );
+        $enrollmentInsert->execute([
+            'learner_id' => $learnerId,
+            'course_id' => $courseId,
+        ]);
+    }
+
+    $requestUpdate = $pdo->prepare(
+        'UPDATE class_enrollment_requests
+         SET status = "Approved",
+             learner_id = :learner_id,
+             reviewed_at = NOW(),
+             reviewed_by_user_id = :reviewed_by_user_id
+         WHERE id = :id'
+    );
+    $requestUpdate->execute([
+        'learner_id' => $learnerId,
+        'reviewed_by_user_id' => $adminUserId,
+        'id' => (int) $request['id'],
+    ]);
+
+    return $learnerId;
+}
+
 function classCourseId(PDO $pdo, array $class): int
 {
     $courseCode = 'CLASS-' . (int) $class['id'];
@@ -129,7 +246,8 @@ function classCourseId(PDO $pdo, array $class): int
          ON DUPLICATE KEY UPDATE
             course_name = VALUES(course_name),
             description = VALUES(description),
-            status = VALUES(status)'
+            status = VALUES(status),
+            deleted_at = NULL'
     );
     $courseStatement->execute([
         'course_code' => $courseCode,
@@ -138,7 +256,7 @@ function classCourseId(PDO $pdo, array $class): int
         'status' => $class['status'],
     ]);
 
-    $lookupStatement = $pdo->prepare('SELECT id FROM courses WHERE course_code = :course_code LIMIT 1');
+    $lookupStatement = $pdo->prepare('SELECT id FROM courses WHERE course_code = :course_code AND deleted_at IS NULL LIMIT 1');
     $lookupStatement->execute(['course_code' => $courseCode]);
 
     return (int) $lookupStatement->fetchColumn();
@@ -151,7 +269,7 @@ function classTopicExists(PDO $pdo, int $classId, int $topicId): bool
     }
 
     // Topics are scoped to a class, so forms cannot attach records to another class topic.
-    $topicStatement = $pdo->prepare('SELECT id FROM class_material_folders WHERE id = :id AND class_id = :class_id LIMIT 1');
+    $topicStatement = $pdo->prepare('SELECT id FROM class_material_folders WHERE id = :id AND class_id = :class_id AND deleted_at IS NULL LIMIT 1');
     $topicStatement->execute([
         'id' => $topicId,
         'class_id' => $classId,
@@ -163,7 +281,7 @@ function classTopicExists(PDO $pdo, int $classId, int $topicId): bool
 function normalizeTopicSortOrder(PDO $pdo, int $classId): void
 {
     // Keep topic ordering compact per class so the up/down controls swap the nearest neighbor.
-    $topicRowsStatement = $pdo->prepare('SELECT id FROM class_material_folders WHERE class_id = :class_id ORDER BY sort_order ASC, created_at DESC, id DESC');
+    $topicRowsStatement = $pdo->prepare('SELECT id FROM class_material_folders WHERE class_id = :class_id AND deleted_at IS NULL ORDER BY sort_order ASC, created_at DESC, id DESC');
     $topicRowsStatement->execute(['class_id' => $classId]);
     $orderStatement = $pdo->prepare('UPDATE class_material_folders SET sort_order = :sort_order WHERE id = :id AND class_id = :class_id');
 
@@ -217,14 +335,15 @@ function replaceQuizQuestions(PDO $pdo, int $quizId, array $preparedQuestions): 
 {
     // Replacing the answer key requires fresh question and choice ids for reliable scoring.
     $choiceDelete = $pdo->prepare(
-        'DELETE quiz_choices
-         FROM quiz_choices
+        'UPDATE quiz_choices
          INNER JOIN quiz_questions ON quiz_questions.id = quiz_choices.question_id
-         WHERE quiz_questions.quiz_id = :quiz_id'
+         SET quiz_choices.deleted_at = NOW()
+         WHERE quiz_questions.quiz_id = :quiz_id
+           AND quiz_choices.deleted_at IS NULL'
     );
     $choiceDelete->execute(['quiz_id' => $quizId]);
 
-    $questionDelete = $pdo->prepare('DELETE FROM quiz_questions WHERE quiz_id = :quiz_id');
+    $questionDelete = $pdo->prepare('UPDATE quiz_questions SET deleted_at = NOW() WHERE quiz_id = :quiz_id AND deleted_at IS NULL');
     $questionDelete->execute(['quiz_id' => $quizId]);
 
     $questionStatement = $pdo->prepare(
@@ -262,7 +381,7 @@ $tool = in_array($tool, $allowedTools, true) ? $tool : 'dashboard';
 $errors = [];
 $success = $_GET['success'] ?? '';
 $selectedTopicId = (int) ($_GET['topic_id'] ?? $_POST['topic_id'] ?? 0);
-$isAdmin = $auth->isAdmin();
+$isAdmin = $auth->isAdminSideUser();
 $isTeacher = $auth->isTeacher();
 $teacherProfile = null;
 $materialUploadDirectory = __DIR__ . '/uploads/materials';
@@ -275,6 +394,10 @@ $topicUploadPathPrefix = 'uploads/topics/';
 if (!$isAdmin && !$isTeacher) {
     header('Location: ' . $auth->redirectPath());
     exit;
+}
+
+if ($isAdmin) {
+    kiwiRequirePermission($pdo, 'classes.manage');
 }
 
 if (!is_dir($materialUploadDirectory)) {
@@ -308,6 +431,7 @@ $classStatement = $pdo->prepare(
     'SELECT classes.*
      FROM classes
      WHERE classes.id = :id
+       AND classes.deleted_at IS NULL
      LIMIT 1'
 );
 $classStatement->execute(['id' => $classId]);
@@ -323,6 +447,8 @@ $assignedTeacherStatement = $pdo->prepare(
      FROM class_teachers
      INNER JOIN teachers ON teachers.id = class_teachers.teacher_id
      WHERE class_teachers.class_id = :class_id
+       AND class_teachers.deleted_at IS NULL
+       AND teachers.deleted_at IS NULL
      ORDER BY teachers.full_name'
 );
 $assignedTeacherStatement->execute(['class_id' => $classId]);
@@ -331,7 +457,7 @@ $assignedTeacherIds = array_map(static fn ($teacher): int => (int) $teacher['id'
 
 if (!$assignedTeachers && !empty($class['teacher_id'])) {
     // Older class records may still only use classes.teacher_id, so keep them visible until reassigned.
-    $legacyTeacherStatement = $pdo->prepare('SELECT * FROM teachers WHERE id = :id LIMIT 1');
+    $legacyTeacherStatement = $pdo->prepare('SELECT * FROM teachers WHERE id = :id AND deleted_at IS NULL LIMIT 1');
     $legacyTeacherStatement->execute(['id' => (int) $class['teacher_id']]);
     $legacyTeacher = $legacyTeacherStatement->fetch() ?: null;
 
@@ -347,7 +473,7 @@ $class['display_teacher'] = $assignedTeachers
 $primaryTeacher = $assignedTeachers[0] ?? null;
 
 if ($isTeacher) {
-    $teacherStatement = $pdo->prepare('SELECT * FROM teachers WHERE email = :email LIMIT 1');
+    $teacherStatement = $pdo->prepare('SELECT * FROM teachers WHERE email = :email AND deleted_at IS NULL LIMIT 1');
     $teacherStatement->execute(['email' => $currentUser['email']]);
     $teacherProfile = $teacherStatement->fetch() ?: null;
 
@@ -365,6 +491,116 @@ $courseId = classCourseId($pdo, $class);
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
 
+    if ($action === 'approve_enrollment_request') {
+        $requestId = (int) ($_POST['request_id'] ?? 0);
+
+        if (!$isAdmin) {
+            $errors[] = 'Only administrators can approve enrollment requests.';
+        }
+
+        $requestStatement = $pdo->prepare(
+            'SELECT *
+             FROM class_enrollment_requests
+             WHERE id = :id AND class_id = :class_id AND status = "Pending" AND deleted_at IS NULL
+             LIMIT 1'
+        );
+        $requestStatement->execute([
+            'id' => $requestId,
+            'class_id' => $classId,
+        ]);
+        $enrollmentRequest = $requestStatement->fetch() ?: null;
+
+        if (!$enrollmentRequest) {
+            $errors[] = 'Select a pending enrollment request.';
+        }
+
+        if (!$errors) {
+            $learnerPassword = generateLearnerPassword();
+
+            try {
+                $pdo->beginTransaction();
+                approveClassEnrollmentRequest($pdo, $enrollmentRequest, $courseId, (int) $currentUser['id'], $learnerPassword);
+                $pdo->commit();
+
+                $mailer = new SmtpMailer($mailerConfig);
+                $emailSent = kiwiSendEnrollmentApprovedEmail(
+                    $mailer,
+                    (string) $enrollmentRequest['email'],
+                    kiwiEnrollmentName($enrollmentRequest),
+                    (string) $class['class_name'],
+                    $learnerPassword
+                );
+                $emailStatus = $emailSent ? 'sent' : 'failed';
+                $mailError = $emailStatus === 'failed' ? '&mail_error=' . urlencode($mailer->getLastError()) : '';
+
+                header('Location: class_workspace.php?class_id=' . $classId . '&tool=learners&success=enrollment_approved&credential_email=' . $emailStatus . $mailError);
+                exit;
+            } catch (Throwable $exception) {
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
+
+                $errors[] = 'Enrollment request could not be approved.';
+            }
+        }
+
+        $tool = 'learners';
+    }
+
+    if ($action === 'disapprove_enrollment_request') {
+        $requestId = (int) ($_POST['request_id'] ?? 0);
+
+        if (!$isAdmin) {
+            $errors[] = 'Only administrators can disapprove enrollment requests.';
+        }
+
+        $requestStatement = $pdo->prepare(
+            'SELECT *
+             FROM class_enrollment_requests
+             WHERE id = :id AND class_id = :class_id AND status = "Pending" AND deleted_at IS NULL
+             LIMIT 1'
+        );
+        $requestStatement->execute([
+            'id' => $requestId,
+            'class_id' => $classId,
+        ]);
+        $enrollmentRequest = $requestStatement->fetch() ?: null;
+
+        if (!$enrollmentRequest) {
+            $errors[] = 'Select a pending enrollment request.';
+        }
+
+        if (!$errors) {
+            $updateStatement = $pdo->prepare(
+                'UPDATE class_enrollment_requests
+                 SET status = "Disapproved",
+                     reviewed_at = NOW(),
+                     reviewed_by_user_id = :reviewed_by_user_id
+                 WHERE id = :id AND class_id = :class_id'
+            );
+            $updateStatement->execute([
+                'reviewed_by_user_id' => (int) $currentUser['id'],
+                'id' => $requestId,
+                'class_id' => $classId,
+            ]);
+
+            $mailer = new SmtpMailer($mailerConfig);
+            $emailSent = kiwiSendEnrollmentDisapprovedEmail(
+                $mailer,
+                (string) $enrollmentRequest['email'],
+                kiwiEnrollmentName($enrollmentRequest),
+                (string) $class['class_name']
+            );
+            $emailStatus = $emailSent ? 'sent' : 'failed';
+            $mailError = $emailStatus === 'failed' ? '&mail_error=' . urlencode($mailer->getLastError()) : '';
+
+            header('Location: class_workspace.php?class_id=' . $classId . '&tool=learners&success=enrollment_disapproved&notification_email=' . $emailStatus . $mailError);
+            exit;
+        }
+
+        $tool = 'learners';
+    }
+
     if ($action === 'reset_learner_credentials') {
         $learnerId = (int) ($_POST['learner_id'] ?? 0);
 
@@ -378,7 +614,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
              LEFT JOIN course_enrollments
                 ON course_enrollments.learner_id = learners.id
                AND course_enrollments.course_id = :course_id
+               AND course_enrollments.deleted_at IS NULL
              WHERE learners.id = :learner_id
+               AND learners.deleted_at IS NULL
                AND (
                     learners.class_id = :class_id
                     OR course_enrollments.enrollment_status IN ("Enrolled", "In Progress", "Completed")
@@ -410,7 +648,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                  VALUES (:name, :email, :password_hash, :role)
                  ON DUPLICATE KEY UPDATE
                     name = VALUES(name),
-                    password_hash = VALUES(password_hash)'
+                    password_hash = VALUES(password_hash),
+            deleted_at = NULL'
             );
             $userStatement->execute([
                 'name' => $learnerName,
@@ -431,6 +670,71 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $tool = 'learners';
     }
 
+    if ($action === 'remove_class_learner') {
+        $learnerId = (int) ($_POST['learner_id'] ?? 0);
+
+        if (!$isAdmin) {
+            $errors[] = 'Only administrators can delete learners from a class.';
+        }
+
+        $learnerStatement = $pdo->prepare(
+            'SELECT DISTINCT learners.id
+             FROM learners
+             LEFT JOIN course_enrollments
+                ON course_enrollments.learner_id = learners.id
+               AND course_enrollments.course_id = :course_id
+               AND course_enrollments.deleted_at IS NULL
+             WHERE learners.id = :learner_id
+               AND learners.deleted_at IS NULL
+               AND (
+                    learners.class_id = :class_id
+                    OR course_enrollments.enrollment_status IN ("Enrolled", "In Progress", "Completed")
+               )
+             LIMIT 1'
+        );
+        $learnerStatement->execute([
+            'learner_id' => $learnerId,
+            'class_id' => $classId,
+            'course_id' => $courseId,
+        ]);
+
+        if (!$learnerStatement->fetch()) {
+            $errors[] = 'Select a valid learner from this class.';
+        }
+
+        if (!$errors) {
+            // Soft remove the learner from this class while preserving the learner profile and history.
+            $removeEnrollment = $pdo->prepare(
+                'UPDATE course_enrollments
+                 SET deleted_at = NOW(), enrollment_status = "Dropped"
+                 WHERE learner_id = :learner_id
+                   AND course_id = :course_id
+                   AND deleted_at IS NULL'
+            );
+            $removeEnrollment->execute([
+                'learner_id' => $learnerId,
+                'course_id' => $courseId,
+            ]);
+
+            $clearLegacyClass = $pdo->prepare(
+                'UPDATE learners
+                 SET class_id = NULL
+                 WHERE id = :learner_id
+                   AND class_id = :class_id
+                   AND deleted_at IS NULL'
+            );
+            $clearLegacyClass->execute([
+                'learner_id' => $learnerId,
+                'class_id' => $classId,
+            ]);
+
+            header('Location: class_workspace.php?class_id=' . $classId . '&tool=learners&success=learner_removed');
+            exit;
+        }
+
+        $tool = 'learners';
+    }
+
     if ($action === 'add_class_learners') {
         $selectedLearnerIds = array_map('intval', $_POST['learner_ids'] ?? []);
         $selectedLearnerIds = array_values(array_unique(array_filter($selectedLearnerIds)));
@@ -444,15 +748,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         if (!$errors) {
-            // Add learners through the class-backed course enrollment and ignore already-linked learners.
+            // Add learners only when they are not connected to any other class-backed course.
             $eligibleStatement = $pdo->prepare(
                 'SELECT learners.id
                  FROM learners
                  LEFT JOIN course_enrollments
                     ON course_enrollments.learner_id = learners.id
-                   AND course_enrollments.course_id = :course_id
+                   AND course_enrollments.deleted_at IS NULL
                  WHERE learners.id = :learner_id
-                   AND (learners.class_id IS NULL OR learners.class_id <> :class_id)
+                   AND learners.deleted_at IS NULL
+                   AND learners.class_id IS NULL
                    AND course_enrollments.id IS NULL
                  LIMIT 1'
             );
@@ -465,8 +770,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             foreach ($selectedLearnerIds as $learnerId) {
                 $eligibleStatement->execute([
                     'learner_id' => $learnerId,
-                    'class_id' => $classId,
-                    'course_id' => $courseId,
                 ]);
 
                 if (!$eligibleStatement->fetch()) {
@@ -500,33 +803,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         if (!$errors) {
-            // Assign teachers through the class_teachers join table and ignore teachers already assigned.
+            // Assign teachers only when they are not connected to any other class.
             $eligibleStatement = $pdo->prepare(
                 'SELECT teachers.id
                  FROM teachers
                  LEFT JOIN class_teachers
                     ON class_teachers.teacher_id = teachers.id
-                   AND class_teachers.class_id = :class_id
+                   AND class_teachers.deleted_at IS NULL
                  LEFT JOIN classes AS legacy_class
-                    ON legacy_class.id = :legacy_class_id
-                   AND legacy_class.teacher_id = teachers.id
+                    ON legacy_class.teacher_id = teachers.id
+                   AND legacy_class.deleted_at IS NULL
                  WHERE teachers.id = :teacher_id
                    AND teachers.status = "Active"
+                   AND teachers.deleted_at IS NULL
                    AND class_teachers.id IS NULL
                    AND legacy_class.id IS NULL
                  LIMIT 1'
             );
             $assignStatement = $pdo->prepare(
-                'INSERT IGNORE INTO class_teachers (class_id, teacher_id)
-                 VALUES (:class_id, :teacher_id)'
+                'INSERT INTO class_teachers (class_id, teacher_id)
+                 VALUES (:class_id, :teacher_id)
+                 ON DUPLICATE KEY UPDATE deleted_at = NULL'
             );
             $addedCount = 0;
 
             foreach ($selectedTeacherIds as $teacherId) {
                 $eligibleStatement->execute([
                     'teacher_id' => $teacherId,
-                    'class_id' => $classId,
-                    'legacy_class_id' => $classId,
                 ]);
 
                 if (!$eligibleStatement->fetch()) {
@@ -560,7 +863,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         if (!$errors) {
             // Removing an assignment keeps the teacher masterlist and login account intact.
-            $removeStatement = $pdo->prepare('DELETE FROM class_teachers WHERE class_id = :class_id AND teacher_id = :teacher_id');
+            $removeStatement = $pdo->prepare('UPDATE class_teachers SET deleted_at = NOW() WHERE class_id = :class_id AND teacher_id = :teacher_id AND deleted_at IS NULL');
             $removeStatement->execute([
                 'class_id' => $classId,
                 'teacher_id' => $teacherId,
@@ -762,7 +1065,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         if (!$errors) {
-            $nextSortOrderStatement = $pdo->prepare('SELECT COALESCE(MAX(sort_order), 0) + 1 FROM class_material_folders WHERE class_id = :class_id');
+            $nextSortOrderStatement = $pdo->prepare('SELECT COALESCE(MAX(sort_order), 0) + 1 FROM class_material_folders WHERE class_id = :class_id AND deleted_at IS NULL');
             $nextSortOrderStatement->execute(['class_id' => $classId]);
             $nextSortOrder = (int) $nextSortOrderStatement->fetchColumn();
 
@@ -799,7 +1102,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!classTopicExists($pdo, $classId, $folderId)) {
             $errors[] = 'Select a valid topic.';
         } else {
-            $existingBannerStatement = $pdo->prepare('SELECT banner_image FROM class_material_folders WHERE id = :id AND class_id = :class_id LIMIT 1');
+            $existingBannerStatement = $pdo->prepare('SELECT banner_image FROM class_material_folders WHERE id = :id AND class_id = :class_id AND deleted_at IS NULL LIMIT 1');
             $existingBannerStatement->execute([
                 'id' => $folderId,
                 'class_id' => $classId,
@@ -836,7 +1139,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                     if (move_uploaded_file($_FILES['topic_banner_image']['tmp_name'], $targetPath)) {
                         $bannerImage = $topicUploadPathPrefix . $filename;
-                        deleteTopicBanner($existingBanner);
                     } else {
                         $errors[] = 'Topic wallpaper could not be saved.';
                     }
@@ -881,17 +1183,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // Deleting a topic only unassigns content so materials, quizzes, assignments, and grades stay intact.
             try {
                 $pdo->beginTransaction();
-                $bannerStatement = $pdo->prepare('SELECT banner_image FROM class_material_folders WHERE id = :id AND class_id = :class_id LIMIT 1');
+                $bannerStatement = $pdo->prepare('SELECT banner_image FROM class_material_folders WHERE id = :id AND class_id = :class_id AND deleted_at IS NULL LIMIT 1');
                 $bannerStatement->execute([
                     'id' => $folderId,
                     'class_id' => $classId,
                 ]);
                 $bannerToDelete = (string) ($bannerStatement->fetchColumn() ?: '');
                 $unassignStatements = [
-                    'UPDATE class_learning_materials SET folder_id = NULL WHERE folder_id = :folder_id AND class_id = :class_id',
-                    'UPDATE class_quizzes SET folder_id = NULL WHERE folder_id = :folder_id AND class_id = :class_id',
-                    'UPDATE class_assignments SET folder_id = NULL WHERE folder_id = :folder_id AND class_id = :class_id',
-                    'UPDATE class_tasks SET folder_id = NULL WHERE folder_id = :folder_id AND class_id = :class_id',
+                    'UPDATE class_learning_materials SET folder_id = NULL WHERE folder_id = :folder_id AND class_id = :class_id AND deleted_at IS NULL',
+                    'UPDATE class_quizzes SET folder_id = NULL WHERE folder_id = :folder_id AND class_id = :class_id AND deleted_at IS NULL',
+                    'UPDATE class_assignments SET folder_id = NULL WHERE folder_id = :folder_id AND class_id = :class_id AND deleted_at IS NULL',
+                    'UPDATE class_tasks SET folder_id = NULL WHERE folder_id = :folder_id AND class_id = :class_id AND deleted_at IS NULL',
                 ];
 
                 foreach ($unassignStatements as $unassignSql) {
@@ -902,13 +1204,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     ]);
                 }
 
-                $deleteFolder = $pdo->prepare('DELETE FROM class_material_folders WHERE id = :id AND class_id = :class_id');
+                $deleteFolder = $pdo->prepare('UPDATE class_material_folders SET deleted_at = NOW() WHERE id = :id AND class_id = :class_id AND deleted_at IS NULL');
                 $deleteFolder->execute([
                     'id' => $folderId,
                     'class_id' => $classId,
                 ]);
                 $pdo->commit();
-                deleteTopicBanner($bannerToDelete);
                 normalizeTopicSortOrder($pdo, $classId);
             } catch (Throwable $exception) {
                 if ($pdo->inTransaction()) {
@@ -933,7 +1234,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         normalizeTopicSortOrder($pdo, $classId);
 
-        $folderStatement = $pdo->prepare('SELECT id, sort_order FROM class_material_folders WHERE id = :id AND class_id = :class_id LIMIT 1');
+        $folderStatement = $pdo->prepare('SELECT id, sort_order FROM class_material_folders WHERE id = :id AND class_id = :class_id AND deleted_at IS NULL LIMIT 1');
         $folderStatement->execute([
             'id' => $folderId,
             'class_id' => $classId,
@@ -943,8 +1244,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($folderToMove && in_array($direction, ['up', 'down'], true)) {
             // Swap with the nearest topic in the requested direction for a simple manual order.
             $neighborSql = $direction === 'up'
-                ? 'SELECT id, sort_order FROM class_material_folders WHERE class_id = :class_id AND sort_order < :sort_order ORDER BY sort_order DESC, id DESC LIMIT 1'
-                : 'SELECT id, sort_order FROM class_material_folders WHERE class_id = :class_id AND sort_order > :sort_order ORDER BY sort_order ASC, id ASC LIMIT 1';
+                ? 'SELECT id, sort_order FROM class_material_folders WHERE class_id = :class_id AND deleted_at IS NULL AND sort_order < :sort_order ORDER BY sort_order DESC, id DESC LIMIT 1'
+                : 'SELECT id, sort_order FROM class_material_folders WHERE class_id = :class_id AND deleted_at IS NULL AND sort_order > :sort_order ORDER BY sort_order ASC, id ASC LIMIT 1';
             $neighborStatement = $pdo->prepare($neighborSql);
             $neighborStatement->execute([
                 'class_id' => $classId,
@@ -1037,7 +1338,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($materialId <= 0) {
             $errors[] = 'Select a valid learning material.';
         } else {
-            $editableMaterialStatement = $pdo->prepare('SELECT * FROM class_learning_materials WHERE id = :id AND class_id = :class_id LIMIT 1');
+        $editableMaterialStatement = $pdo->prepare('SELECT * FROM class_learning_materials WHERE id = :id AND class_id = :class_id AND deleted_at IS NULL LIMIT 1');
             $editableMaterialStatement->execute([
                 'id' => $materialId,
                 'class_id' => $classId,
@@ -1102,7 +1403,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if ($action === 'delete_material') {
         $materialId = (int) ($_POST['material_id'] ?? 0);
-        $materialStatement = $pdo->prepare('SELECT file_path FROM class_learning_materials WHERE id = :id AND class_id = :class_id LIMIT 1');
+        $materialStatement = $pdo->prepare('SELECT file_path FROM class_learning_materials WHERE id = :id AND class_id = :class_id AND deleted_at IS NULL LIMIT 1');
         $materialStatement->execute([
             'id' => $materialId,
             'class_id' => $classId,
@@ -1110,9 +1411,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $material = $materialStatement->fetch() ?: null;
 
         if ($material) {
-            deleteMaterialFile((string) ($material['file_path'] ?? ''));
-            // Delete only materials that belong to the open class workspace.
-            $deleteStatement = $pdo->prepare('DELETE FROM class_learning_materials WHERE id = :id AND class_id = :class_id');
+            // Soft delete only materials that belong to the open class workspace.
+            $deleteStatement = $pdo->prepare('UPDATE class_learning_materials SET deleted_at = NOW() WHERE id = :id AND class_id = :class_id AND deleted_at IS NULL');
             $deleteStatement->execute([
                 'id' => $materialId,
                 'class_id' => $classId,
@@ -1196,7 +1496,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $errors[] = 'Select a valid quiz status.';
         }
 
-        $quizOwnerStatement = $pdo->prepare('SELECT id FROM class_quizzes WHERE id = :id AND class_id = :class_id LIMIT 1');
+        $quizOwnerStatement = $pdo->prepare('SELECT id FROM class_quizzes WHERE id = :id AND class_id = :class_id AND deleted_at IS NULL LIMIT 1');
         $quizOwnerStatement->execute([
             'id' => $quizId,
             'class_id' => $classId,
@@ -1218,14 +1518,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 // Replacing questions clears old attempts because saved answers point to old choice ids.
                 $answerDelete = $pdo->prepare(
-                    'DELETE quiz_attempt_answers
-                     FROM quiz_attempt_answers
+                    'UPDATE quiz_attempt_answers
                      INNER JOIN quiz_attempts ON quiz_attempts.id = quiz_attempt_answers.attempt_id
-                     WHERE quiz_attempts.quiz_id = :quiz_id'
+                     SET quiz_attempt_answers.deleted_at = NOW()
+                     WHERE quiz_attempts.quiz_id = :quiz_id
+                       AND quiz_attempt_answers.deleted_at IS NULL'
                 );
                 $answerDelete->execute(['quiz_id' => $quizId]);
 
-                $attemptDelete = $pdo->prepare('DELETE FROM quiz_attempts WHERE quiz_id = :quiz_id');
+                $attemptDelete = $pdo->prepare('UPDATE quiz_attempts SET deleted_at = NOW() WHERE quiz_id = :quiz_id AND deleted_at IS NULL');
                 $attemptDelete->execute(['quiz_id' => $quizId]);
 
                 $quizUpdate = $pdo->prepare(
@@ -1265,7 +1566,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if ($action === 'delete_quiz') {
         $quizId = (int) ($_POST['quiz_id'] ?? 0);
-        $quizStatement = $pdo->prepare('SELECT id FROM class_quizzes WHERE id = :id AND class_id = :class_id LIMIT 1');
+        $quizStatement = $pdo->prepare('SELECT id FROM class_quizzes WHERE id = :id AND class_id = :class_id AND deleted_at IS NULL LIMIT 1');
         $quizStatement->execute([
             'id' => $quizId,
             'class_id' => $classId,
@@ -1274,28 +1575,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($quizStatement->fetch()) {
             // Remove dependent rows manually so older local databases without foreign keys stay tidy.
             $answerDelete = $pdo->prepare(
-                'DELETE quiz_attempt_answers
-                 FROM quiz_attempt_answers
+                'UPDATE quiz_attempt_answers
                  INNER JOIN quiz_attempts ON quiz_attempts.id = quiz_attempt_answers.attempt_id
-                 WHERE quiz_attempts.quiz_id = :quiz_id'
+                 SET quiz_attempt_answers.deleted_at = NOW()
+                 WHERE quiz_attempts.quiz_id = :quiz_id
+                   AND quiz_attempt_answers.deleted_at IS NULL'
             );
             $answerDelete->execute(['quiz_id' => $quizId]);
 
-            $attemptDelete = $pdo->prepare('DELETE FROM quiz_attempts WHERE quiz_id = :quiz_id');
+            $attemptDelete = $pdo->prepare('UPDATE quiz_attempts SET deleted_at = NOW() WHERE quiz_id = :quiz_id AND deleted_at IS NULL');
             $attemptDelete->execute(['quiz_id' => $quizId]);
 
             $choiceDelete = $pdo->prepare(
-                'DELETE quiz_choices
-                 FROM quiz_choices
+                'UPDATE quiz_choices
                  INNER JOIN quiz_questions ON quiz_questions.id = quiz_choices.question_id
-                 WHERE quiz_questions.quiz_id = :quiz_id'
+                 SET quiz_choices.deleted_at = NOW()
+                 WHERE quiz_questions.quiz_id = :quiz_id
+                   AND quiz_choices.deleted_at IS NULL'
             );
             $choiceDelete->execute(['quiz_id' => $quizId]);
 
-            $questionDelete = $pdo->prepare('DELETE FROM quiz_questions WHERE quiz_id = :quiz_id');
+            $questionDelete = $pdo->prepare('UPDATE quiz_questions SET deleted_at = NOW() WHERE quiz_id = :quiz_id AND deleted_at IS NULL');
             $questionDelete->execute(['quiz_id' => $quizId]);
 
-            $quizDelete = $pdo->prepare('DELETE FROM class_quizzes WHERE id = :id AND class_id = :class_id');
+            $quizDelete = $pdo->prepare('UPDATE class_quizzes SET deleted_at = NOW(), status = "Inactive" WHERE id = :id AND class_id = :class_id AND deleted_at IS NULL');
             $quizDelete->execute([
                 'id' => $quizId,
                 'class_id' => $classId,
@@ -1382,7 +1685,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if ($action === 'delete_assignment') {
         $assignmentId = (int) ($_POST['assignment_id'] ?? 0);
-        $assignmentStatement = $pdo->prepare('SELECT attachment_path FROM class_assignments WHERE id = :id AND class_id = :class_id LIMIT 1');
+        $assignmentStatement = $pdo->prepare('SELECT attachment_path FROM class_assignments WHERE id = :id AND class_id = :class_id AND deleted_at IS NULL LIMIT 1');
         $assignmentStatement->execute([
             'id' => $assignmentId,
             'class_id' => $classId,
@@ -1390,12 +1693,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $assignment = $assignmentStatement->fetch() ?: null;
 
         if ($assignment) {
-            deleteAssignmentFile((string) ($assignment['attachment_path'] ?? ''));
-            // Delete submissions first so older local databases without foreign keys stay tidy.
-            $submissionDelete = $pdo->prepare('DELETE FROM assignment_submissions WHERE assignment_id = :assignment_id');
+            // Soft delete submissions first so learner history remains recoverable.
+            $submissionDelete = $pdo->prepare('UPDATE assignment_submissions SET deleted_at = NOW() WHERE assignment_id = :assignment_id AND deleted_at IS NULL');
             $submissionDelete->execute(['assignment_id' => $assignmentId]);
 
-            $assignmentDelete = $pdo->prepare('DELETE FROM class_assignments WHERE id = :id AND class_id = :class_id');
+            $assignmentDelete = $pdo->prepare('UPDATE class_assignments SET deleted_at = NOW(), status = "Inactive" WHERE id = :id AND class_id = :class_id AND deleted_at IS NULL');
             $assignmentDelete->execute([
                 'id' => $assignmentId,
                 'class_id' => $classId,
@@ -1420,7 +1722,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $errors[] = 'Choose a valid topic date.';
         }
 
-        if (!classTopicExists($pdo, $classId, $taskTopicId)) {
+        if ($taskTopicId <= 0 || !classTopicExists($pdo, $classId, $taskTopicId)) {
             $errors[] = 'Select a valid class topic.';
         }
 
@@ -1450,13 +1752,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($action === 'delete_task') {
         // Delete a class topic and its grades from this workspace only.
         $taskId = (int) ($_POST['task_id'] ?? 0);
-        $deleteGrades = $pdo->prepare('DELETE FROM learner_grades WHERE task_id = :task_id AND class_id = :class_id');
+        $deleteGrades = $pdo->prepare('UPDATE learner_grades SET deleted_at = NOW() WHERE task_id = :task_id AND class_id = :class_id AND deleted_at IS NULL');
         $deleteGrades->execute([
             'task_id' => $taskId,
             'class_id' => $classId,
         ]);
 
-        $deleteTask = $pdo->prepare('DELETE FROM class_tasks WHERE id = :task_id AND class_id = :class_id');
+        $deleteTask = $pdo->prepare('UPDATE class_tasks SET deleted_at = NOW() WHERE id = :task_id AND class_id = :class_id AND deleted_at IS NULL');
         $deleteTask->execute([
             'task_id' => $taskId,
             'class_id' => $classId,
@@ -1468,7 +1770,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if ($action === 'save_grades') {
         $taskId = (int) ($_POST['task_id'] ?? 0);
-        $taskStatement = $pdo->prepare('SELECT * FROM class_tasks WHERE id = :id AND class_id = :class_id LIMIT 1');
+        $taskStatement = $pdo->prepare('SELECT * FROM class_tasks WHERE id = :id AND class_id = :class_id AND deleted_at IS NULL LIMIT 1');
         $taskStatement->execute([
             'id' => $taskId,
             'class_id' => $classId,
@@ -1502,7 +1804,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'SELECT learners.id
                      FROM learners
                      LEFT JOIN course_enrollments ON course_enrollments.learner_id = learners.id
+                        AND course_enrollments.deleted_at IS NULL
                      WHERE learners.id = :learner_id
+                       AND learners.deleted_at IS NULL
                        AND (
                          learners.class_id = :class_id
                          OR (
@@ -1523,7 +1827,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     break;
                 }
 
-                $existingStatement = $pdo->prepare('SELECT id FROM learner_grades WHERE task_id = :task_id AND learner_id = :learner_id LIMIT 1');
+                $existingStatement = $pdo->prepare('SELECT id FROM learner_grades WHERE task_id = :task_id AND learner_id = :learner_id AND deleted_at IS NULL LIMIT 1');
                 $existingStatement->execute([
                     'task_id' => $taskId,
                     'learner_id' => $learnerId,
@@ -1573,7 +1877,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         if (!$errors) {
-            header('Location: class_workspace.php?class_id=' . $classId . '&tool=grades&task_id=' . $taskId . '&success=grades_saved');
+            $redirectTopicId = (int) ($task['folder_id'] ?? 0);
+            header('Location: class_workspace.php?class_id=' . $classId . '&tool=grades&task_id=' . $taskId . ($redirectTopicId > 0 ? '&topic_id=' . $redirectTopicId : '') . '&success=grades_saved');
             exit;
         }
 
@@ -1585,11 +1890,15 @@ $learnerStatement = $pdo->prepare(
     'SELECT DISTINCT learners.*
      FROM learners
      LEFT JOIN course_enrollments ON course_enrollments.learner_id = learners.id
-     WHERE learners.class_id = :class_id
+        AND course_enrollments.deleted_at IS NULL
+     WHERE learners.deleted_at IS NULL
+       AND (
+        learners.class_id = :class_id
         OR (
           course_enrollments.course_id = :course_id
           AND course_enrollments.enrollment_status IN ("Enrolled", "In Progress", "Completed")
         )
+       )
      ORDER BY learners.first_name, learners.last_name'
 );
 $learnerStatement->execute([
@@ -1598,21 +1907,19 @@ $learnerStatement->execute([
 ]);
 $learners = $learnerStatement->fetchAll();
 
-// Available learners exclude anyone already connected to this class to prevent duplicate class enrollment.
+// Available learners exclude anyone already connected to any class.
 $availableLearnerStatement = $pdo->prepare(
     'SELECT learners.*
      FROM learners
      LEFT JOIN course_enrollments
-        ON course_enrollments.learner_id = learners.id
-       AND course_enrollments.course_id = :course_id
-     WHERE (learners.class_id IS NULL OR learners.class_id <> :class_id)
+       ON course_enrollments.learner_id = learners.id
+       AND course_enrollments.deleted_at IS NULL
+     WHERE learners.class_id IS NULL
+       AND learners.deleted_at IS NULL
        AND course_enrollments.id IS NULL
      ORDER BY learners.first_name, learners.last_name'
 );
-$availableLearnerStatement->execute([
-    'class_id' => $classId,
-    'course_id' => $courseId,
-]);
+$availableLearnerStatement->execute();
 $availableLearners = $availableLearnerStatement->fetchAll();
 
 $availableTeacherStatement = $pdo->prepare(
@@ -1620,20 +1927,27 @@ $availableTeacherStatement = $pdo->prepare(
      FROM teachers
      LEFT JOIN class_teachers
         ON class_teachers.teacher_id = teachers.id
-       AND class_teachers.class_id = :class_id
+       AND class_teachers.deleted_at IS NULL
      LEFT JOIN classes AS legacy_class
-        ON legacy_class.id = :legacy_class_id
-       AND legacy_class.teacher_id = teachers.id
+        ON legacy_class.teacher_id = teachers.id
+       AND legacy_class.deleted_at IS NULL
      WHERE teachers.status = "Active"
+       AND teachers.deleted_at IS NULL
        AND class_teachers.id IS NULL
        AND legacy_class.id IS NULL
      ORDER BY teachers.full_name'
 );
-$availableTeacherStatement->execute([
-    'class_id' => $classId,
-    'legacy_class_id' => $classId,
-]);
+$availableTeacherStatement->execute();
 $availableTeachers = $availableTeacherStatement->fetchAll();
+
+$pendingEnrollmentStatement = $pdo->prepare(
+    'SELECT *
+     FROM class_enrollment_requests
+     WHERE class_id = :class_id AND status = "Pending" AND deleted_at IS NULL
+     ORDER BY requested_at ASC, id ASC'
+);
+$pendingEnrollmentStatement->execute(['class_id' => $classId]);
+$pendingEnrollmentRequests = $pendingEnrollmentStatement->fetchAll();
 
 $tasksStatement = $pdo->prepare(
     'SELECT class_tasks.*,
@@ -1641,9 +1955,10 @@ $tasksStatement = $pdo->prepare(
             COUNT(learner_grades.id) AS grade_count,
             COALESCE(AVG(learner_grades.score), 0) AS average_score
      FROM class_tasks
-     LEFT JOIN class_material_folders ON class_material_folders.id = class_tasks.folder_id
-     LEFT JOIN learner_grades ON learner_grades.task_id = class_tasks.id
+     LEFT JOIN class_material_folders ON class_material_folders.id = class_tasks.folder_id AND class_material_folders.deleted_at IS NULL
+     LEFT JOIN learner_grades ON learner_grades.task_id = class_tasks.id AND learner_grades.deleted_at IS NULL
      WHERE class_tasks.class_id = :class_id
+       AND class_tasks.deleted_at IS NULL
      GROUP BY class_tasks.id
      ORDER BY class_tasks.task_date DESC, class_tasks.id DESC'
 );
@@ -1658,24 +1973,29 @@ $materialFoldersStatement = $pdo->prepare(
                 SELECT COUNT(*)
                 FROM class_learning_materials
                 WHERE class_learning_materials.folder_id = class_material_folders.id
+                  AND class_learning_materials.deleted_at IS NULL
             ) AS material_count,
             (
                 SELECT COUNT(*)
                 FROM class_quizzes
                 WHERE class_quizzes.folder_id = class_material_folders.id
+                  AND class_quizzes.deleted_at IS NULL
             ) AS quiz_count,
             (
                 SELECT COUNT(*)
                 FROM class_assignments
                 WHERE class_assignments.folder_id = class_material_folders.id
+                  AND class_assignments.deleted_at IS NULL
             ) AS assignment_count,
             (
                 SELECT COUNT(*)
                 FROM class_tasks
                 WHERE class_tasks.folder_id = class_material_folders.id
+                  AND class_tasks.deleted_at IS NULL
             ) AS grade_item_count
      FROM class_material_folders
      WHERE class_material_folders.class_id = :class_id
+       AND class_material_folders.deleted_at IS NULL
      ORDER BY class_material_folders.sort_order ASC, class_material_folders.created_at DESC, class_material_folders.id DESC'
 );
 $materialFoldersStatement->execute(['class_id' => $classId]);
@@ -1694,9 +2014,10 @@ if (!$selectedTopic) {
 
 $materialsSql = 'SELECT class_learning_materials.*, users.name AS uploader_name, class_material_folders.name AS folder_name
      FROM class_learning_materials
-     LEFT JOIN users ON users.id = class_learning_materials.uploaded_by_user_id
-     LEFT JOIN class_material_folders ON class_material_folders.id = class_learning_materials.folder_id
-     WHERE class_learning_materials.class_id = :class_id';
+     LEFT JOIN users ON users.id = class_learning_materials.uploaded_by_user_id AND users.deleted_at IS NULL
+     LEFT JOIN class_material_folders ON class_material_folders.id = class_learning_materials.folder_id AND class_material_folders.deleted_at IS NULL
+     WHERE class_learning_materials.class_id = :class_id
+       AND class_learning_materials.deleted_at IS NULL';
 $materialsParams = ['class_id' => $classId];
 
 if ($selectedTopicId > 0) {
@@ -1718,10 +2039,11 @@ $quizzesSql = 'SELECT class_quizzes.*,
             COUNT(DISTINCT quiz_attempts.id) AS attempt_count,
             COALESCE(AVG(quiz_attempts.score), 0) AS average_score
      FROM class_quizzes
-     LEFT JOIN class_material_folders ON class_material_folders.id = class_quizzes.folder_id
-     LEFT JOIN quiz_questions ON quiz_questions.quiz_id = class_quizzes.id
-     LEFT JOIN quiz_attempts ON quiz_attempts.quiz_id = class_quizzes.id
-     WHERE class_quizzes.class_id = :class_id';
+     LEFT JOIN class_material_folders ON class_material_folders.id = class_quizzes.folder_id AND class_material_folders.deleted_at IS NULL
+     LEFT JOIN quiz_questions ON quiz_questions.quiz_id = class_quizzes.id AND quiz_questions.deleted_at IS NULL
+     LEFT JOIN quiz_attempts ON quiz_attempts.quiz_id = class_quizzes.id AND quiz_attempts.deleted_at IS NULL
+     WHERE class_quizzes.class_id = :class_id
+       AND class_quizzes.deleted_at IS NULL';
 $quizParameters = ['class_id' => $classId];
 
 if ($tool === 'quizzes' && $selectedTopicId > 0) {
@@ -1751,8 +2073,9 @@ if ($quizIds) {
                 quiz_choices.is_correct,
                 quiz_choices.position AS choice_position
          FROM quiz_questions
-         LEFT JOIN quiz_choices ON quiz_choices.question_id = quiz_questions.id
+         LEFT JOIN quiz_choices ON quiz_choices.question_id = quiz_questions.id AND quiz_choices.deleted_at IS NULL
          WHERE quiz_questions.quiz_id IN (' . $quizQuestionPlaceholders . ')
+           AND quiz_questions.deleted_at IS NULL
          ORDER BY quiz_questions.quiz_id, quiz_questions.position, quiz_choices.position'
     );
     $quizQuestionStatement->execute($quizIds);
@@ -1791,9 +2114,10 @@ $assignmentsSql = 'SELECT class_assignments.*,
             class_material_folders.name AS topic_name,
             COUNT(assignment_submissions.id) AS submission_count
      FROM class_assignments
-     LEFT JOIN class_material_folders ON class_material_folders.id = class_assignments.folder_id
-     LEFT JOIN assignment_submissions ON assignment_submissions.assignment_id = class_assignments.id
-     WHERE class_assignments.class_id = :class_id';
+     LEFT JOIN class_material_folders ON class_material_folders.id = class_assignments.folder_id AND class_material_folders.deleted_at IS NULL
+     LEFT JOIN assignment_submissions ON assignment_submissions.assignment_id = class_assignments.id AND assignment_submissions.deleted_at IS NULL
+     WHERE class_assignments.class_id = :class_id
+       AND class_assignments.deleted_at IS NULL';
 $assignmentParameters = ['class_id' => $classId];
 
 if ($tool === 'assignments' && $selectedTopicId > 0) {
@@ -1809,9 +2133,27 @@ $assignmentsStatement = $pdo->prepare($assignmentsSql);
 $assignmentsStatement->execute($assignmentParameters);
 $assignments = $assignmentsStatement->fetchAll();
 
-$selectedTaskId = (int) ($_GET['task_id'] ?? $_POST['task_id'] ?? ($tasks[0]['id'] ?? 0));
+$selectedGradeTopicId = (int) ($_GET['topic_id'] ?? $_POST['topic_id'] ?? ($materialFolders[0]['id'] ?? 0));
+$selectedGradeTopic = null;
+foreach ($materialFolders as $folder) {
+    if ((int) $folder['id'] === $selectedGradeTopicId) {
+        $selectedGradeTopic = $folder;
+        break;
+    }
+}
+
+if (!$selectedGradeTopic) {
+    $selectedGradeTopicId = 0;
+}
+
+// The grades screen first chooses a saved topic, then shows grade items under that topic.
+$gradeTasks = array_values(array_filter($tasks, static function (array $taskRow) use ($selectedGradeTopicId): bool {
+    return $selectedGradeTopicId > 0 && (int) ($taskRow['folder_id'] ?? 0) === $selectedGradeTopicId;
+}));
+
+$selectedTaskId = (int) ($_GET['task_id'] ?? $_POST['task_id'] ?? ($gradeTasks[0]['id'] ?? 0));
 $selectedTask = null;
-foreach ($tasks as $taskRow) {
+foreach ($gradeTasks as $taskRow) {
     if ((int) $taskRow['id'] === $selectedTaskId) {
         $selectedTask = $taskRow;
         break;
@@ -1820,7 +2162,7 @@ foreach ($tasks as $taskRow) {
 
 $gradeRows = [];
 if ($selectedTask) {
-    $gradeStatement = $pdo->prepare('SELECT * FROM learner_grades WHERE task_id = :task_id AND class_id = :class_id');
+    $gradeStatement = $pdo->prepare('SELECT * FROM learner_grades WHERE task_id = :task_id AND class_id = :class_id AND deleted_at IS NULL');
     $gradeStatement->execute([
         'task_id' => (int) $selectedTask['id'],
         'class_id' => $classId,
@@ -1830,18 +2172,21 @@ if ($selectedTask) {
     }
 }
 
-$classAverageStatement = $pdo->prepare('SELECT COALESCE(AVG(score), 0) FROM learner_grades WHERE class_id = :class_id');
+$classAverageStatement = $pdo->prepare('SELECT COALESCE(AVG(score), 0) FROM learner_grades WHERE class_id = :class_id AND deleted_at IS NULL');
 $classAverageStatement->execute(['class_id' => $classId]);
 $classAverage = (float) $classAverageStatement->fetchColumn();
-$gradeCountStatement = $pdo->prepare('SELECT COUNT(*) FROM learner_grades WHERE class_id = :class_id');
+$gradeCountStatement = $pdo->prepare('SELECT COUNT(*) FROM learner_grades WHERE class_id = :class_id AND deleted_at IS NULL');
 $gradeCountStatement->execute(['class_id' => $classId]);
 $gradeCount = (int) $gradeCountStatement->fetchColumn();
 $teacherName = (string) ($primaryTeacher['full_name'] ?? ($class['display_teacher'] ?? ''));
 $teacherInitials = $teacherName !== '' ? strtoupper(substr($teacherName, 0, 1)) : 'T';
 
 $successMessages = [
+    'enrollment_approved' => 'Enrollment request approved successfully.',
+    'enrollment_disapproved' => 'Enrollment request disapproved successfully.',
     'learners_added' => 'Learners added successfully.',
     'learner_credentials_reset' => 'Learner credentials were reset.',
+    'learner_removed' => 'Learner deleted from this class.',
     'teachers_added' => 'Teachers added successfully.',
     'teacher_removed' => 'Teacher removed from this class.',
     'topic_created' => 'Topic added successfully.',
@@ -1862,6 +2207,7 @@ $successMessages = [
     'grades_saved' => 'Grades saved successfully.',
 ];
 $credentialEmailStatus = $_GET['credential_email'] ?? '';
+$notificationEmailStatus = $_GET['notification_email'] ?? '';
 $mailError = trim((string) ($_GET['mail_error'] ?? ''));
 ?>
 <!doctype html>
@@ -1869,21 +2215,22 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Kiwi Digital | <?php echo e($class['class_name']); ?></title>
-  <link rel="icon" type="image/png" href="images/kiwi-logo.png">
-  <link rel="apple-touch-icon" href="images/kiwi-logo.png">
+  <title><?php echo e(kiwiSystemBrandName()); ?> | <?php echo e($class['class_name']); ?></title>
+  <link rel="icon" type="image/png" href="<?php echo e(kiwiSystemLogo()); ?>">
+  <link rel="apple-touch-icon" href="<?php echo e(kiwiSystemLogo()); ?>">
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
   <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" rel="stylesheet">
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
   <link href="css/style.css?v=class-teachers-tab" rel="stylesheet">
+  <?php echo kiwiSystemThemeStyle(); ?>
 </head>
 <body class="dashboard-page class-workspace-page class-workspace-<?php echo e($tool); ?>">
   <div class="app-layout">
     <aside class="sidebar">
       <a class="sidebar-brand" href="<?php echo $isTeacher ? 'teacher_dashboard.php' : 'classes.php'; ?>">
-        <img src="images/kiwi-logo.png" alt="Kiwi Digital Tech Inc." class="brand-logo">
+        <img src="<?php echo e(kiwiSystemLogo()); ?>" alt="<?php echo e(kiwiSystemBrandName()); ?>" class="brand-logo">
         <span>
           <strong><?php echo e($class['class_name']); ?></strong>
           <small>Class Workspace</small>
@@ -1891,13 +2238,16 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
       </a>
       <nav class="sidebar-nav">
         <a class="<?php echo $tool === 'dashboard' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=dashboard"><i class="fa-solid fa-gauge-high"></i> Class Dashboard</a>
+        <a class="<?php echo $tool === 'tasks' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=tasks"><i class="fa-solid fa-list-check"></i> Topics</a>
         <a class="<?php echo $tool === 'learners' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=learners"><i class="fa-solid fa-users"></i> Learners</a>
         <a class="<?php echo $tool === 'teachers' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=teachers"><i class="fa-solid fa-user-tie"></i> Teachers</a>
         <a class="<?php echo $tool === 'materials' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=materials"><i class="fa-solid fa-folder-open"></i> Materials</a>
         <a class="<?php echo $tool === 'quizzes' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=quizzes"><i class="fa-solid fa-circle-question"></i> Quizzes</a>
         <a class="<?php echo $tool === 'assignments' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=assignments"><i class="fa-solid fa-file-pen"></i> Assignments</a>
-        <a class="<?php echo $tool === 'tasks' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=tasks"><i class="fa-solid fa-list-check"></i> Topics</a>
         <a class="<?php echo $tool === 'grades' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=grades"><i class="fa-solid fa-star"></i> Grades</a>
+        <?php if ($isAdmin && kiwiCan($pdo, 'settings.manage')): ?>
+          <a href="settings.php"><i class="fa-solid fa-sliders"></i> System Settings</a>
+        <?php endif; ?>
         <a href="<?php echo $isTeacher ? 'teacher_dashboard.php' : 'classes.php'; ?>"><i class="fa-solid fa-arrow-left"></i> Back to Classes</a>
       </nav>
       <div class="sidebar-footer">
@@ -1942,6 +2292,14 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
             <?php echo $credentialEmailStatus === 'sent'
                 ? 'The new learner credentials were emailed successfully.'
                 : 'The learner password was reset, but the credential email could not be sent.'; ?>
+          </div>
+        <?php endif; ?>
+
+        <?php if (in_array($notificationEmailStatus, ['sent', 'failed'], true)): ?>
+          <div class="alert <?php echo $notificationEmailStatus === 'sent' ? 'alert-info' : 'alert-warning'; ?>" role="alert">
+            <?php echo $notificationEmailStatus === 'sent'
+                ? 'The enrollment notification email was sent successfully.'
+                : 'The enrollment request was updated, but the notification email could not be sent.'; ?>
           </div>
         <?php endif; ?>
 
@@ -2049,12 +2407,68 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
               <div class="d-flex flex-wrap align-items-center gap-2">
                 <span class="badge text-bg-primary"><?php echo count($learners); ?> total</span>
                 <?php if ($isAdmin): ?>
+                  <span class="badge text-bg-warning"><?php echo count($pendingEnrollmentRequests); ?> pending</span>
+                <?php endif; ?>
+                <?php if ($isAdmin): ?>
                   <button type="button" class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#addClassLearnersModal">
                     <i class="fa-solid fa-user-plus me-2"></i>Add Learners
                   </button>
                 <?php endif; ?>
               </div>
             </div>
+
+            <?php if ($isAdmin && !empty($class['enrollment_token'])): ?>
+              <?php $enrollmentLink = kiwiEnrollmentUrl((string) $class['enrollment_token']); ?>
+              <div class="enrollment-link-copy-bar mb-4">
+                <div>
+                  <span class="section-kicker">Enrollment Link</span>
+                  <a href="<?php echo e($enrollmentLink); ?>" target="_blank" rel="noopener"><?php echo e($enrollmentLink); ?></a>
+                </div>
+                <button type="button" class="btn btn-sm btn-primary copy-enrollment-link" data-link="<?php echo e($enrollmentLink); ?>">
+                  <i class="fa-solid fa-copy me-2"></i>Copy Link
+                </button>
+              </div>
+            <?php endif; ?>
+
+            <?php if ($isAdmin && $pendingEnrollmentRequests): ?>
+              <div class="pending-enrollment-list mb-4">
+                <?php foreach ($pendingEnrollmentRequests as $request): ?>
+                  <article class="pending-enrollment-card">
+                    <div>
+                      <span class="section-kicker">Enrollment Link Request</span>
+                      <h3><?php echo e(kiwiEnrollmentName($request)); ?></h3>
+                      <p>
+                        <i class="fa-regular fa-envelope"></i><?php echo e($request['email']); ?>
+                        <?php if (!empty($request['contact_number'])): ?>
+                          <span><i class="fa-solid fa-phone"></i><?php echo e($request['contact_number']); ?></span>
+                        <?php endif; ?>
+                      </p>
+                      <small>Registered <?php echo e(date('M d, Y g:i A', strtotime((string) $request['requested_at']))); ?></small>
+                    </div>
+                    <div class="pending-enrollment-actions">
+                      <form method="post">
+                        <input type="hidden" name="action" value="approve_enrollment_request">
+                        <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
+                        <input type="hidden" name="tool" value="learners">
+                        <input type="hidden" name="request_id" value="<?php echo (int) $request['id']; ?>">
+                        <button type="submit" class="btn btn-sm btn-success">
+                          <i class="fa-solid fa-check me-2"></i>Approve
+                        </button>
+                      </form>
+                      <form method="post" onsubmit="return confirm('Disapprove this registration?');">
+                        <input type="hidden" name="action" value="disapprove_enrollment_request">
+                        <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
+                        <input type="hidden" name="tool" value="learners">
+                        <input type="hidden" name="request_id" value="<?php echo (int) $request['id']; ?>">
+                        <button type="submit" class="btn btn-sm btn-outline-danger">
+                          <i class="fa-solid fa-xmark me-2"></i>Disapprove
+                        </button>
+                      </form>
+                    </div>
+                  </article>
+                <?php endforeach; ?>
+              </div>
+            <?php endif; ?>
 
             <?php if (!$learners): ?>
               <div class="empty-state">
@@ -2065,7 +2479,7 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
               <div class="learner-grid class-workspace-learner-grid">
                 <?php foreach ($learners as $learner): ?>
                   <?php
-                    $fullName = trim($learner['first_name'] . ' ' . $learner['last_name']);
+                    $fullName = trim($learner['first_name'] . ' ' . ($learner['middle_name'] ?? '') . ' ' . $learner['last_name']);
                     $initials = strtoupper(substr($learner['first_name'], 0, 1) . substr($learner['last_name'], 0, 1));
                   ?>
                   <article class="learner-card">
@@ -2094,6 +2508,24 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
                       <h3><?php echo e($fullName); ?></h3>
                       <p class="learner-number"><?php echo e($learner['learner_number']); ?></p>
                     </div>
+                    <?php if ($isAdmin): ?>
+                      <footer class="learner-card-footer">
+                        <div class="learner-icon-actions">
+                          <a class="learner-icon-button" href="learners.php?edit=<?php echo (int) $learner['id']; ?>" aria-label="Edit learner">
+                            <i class="fa-solid fa-pen"></i>
+                          </a>
+                          <form method="post" onsubmit="return confirm('Delete this learner from this class?');">
+                            <input type="hidden" name="action" value="remove_class_learner">
+                            <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
+                            <input type="hidden" name="tool" value="learners">
+                            <input type="hidden" name="learner_id" value="<?php echo (int) $learner['id']; ?>">
+                            <button type="submit" class="learner-icon-button is-danger" aria-label="Delete learner from class">
+                              <i class="fa-solid fa-trash"></i>
+                            </button>
+                          </form>
+                        </div>
+                      </footer>
+                    <?php endif; ?>
                   </article>
                 <?php endforeach; ?>
               </div>
@@ -2591,32 +3023,56 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
               <a href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=tasks" class="btn btn-sm btn-outline-primary">Manage Topics</a>
             </div>
 
-            <?php if (!$tasks): ?>
+            <?php if (!$materialFolders): ?>
               <div class="empty-state">
                 <i class="fa-solid fa-list-check"></i>
-                <p>Add a topic first before encoding grades.</p>
+                <p>Add a saved topic first before encoding grades.</p>
               </div>
             <?php else: ?>
               <form method="get" class="module-form mb-4">
                 <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
                 <input type="hidden" name="tool" value="grades">
-                <label class="form-label" for="task_id_filter">Topic</label>
-                <div class="input-group">
-                  <select class="form-select" id="task_id_filter" name="task_id">
-                    <?php foreach ($tasks as $taskRow): ?>
-                      <option value="<?php echo (int) $taskRow['id']; ?>" <?php echo $selectedTask && (int) $selectedTask['id'] === (int) $taskRow['id'] ? 'selected' : ''; ?>>
-                        <?php echo e($taskRow['task_title'] . (!empty($taskRow['topic_name']) ? ' - ' . $taskRow['topic_name'] : '')); ?>
-                      </option>
-                    <?php endforeach; ?>
-                  </select>
-                  <button type="submit" class="btn btn-primary">Open</button>
+                <div class="row g-3 align-items-end">
+                  <div class="col-md-5">
+                    <label class="form-label" for="grade_topic_id_filter">Topic</label>
+                    <select class="form-select" id="grade_topic_id_filter" name="topic_id" onchange="this.form.submit()">
+                      <?php foreach ($materialFolders as $folder): ?>
+                        <option value="<?php echo (int) $folder['id']; ?>" <?php echo (int) $folder['id'] === $selectedGradeTopicId ? 'selected' : ''; ?>>
+                          <?php echo e($folder['name']); ?>
+                        </option>
+                      <?php endforeach; ?>
+                    </select>
+                  </div>
+                  <div class="col-md-5">
+                    <label class="form-label" for="task_id_filter">Grade item</label>
+                    <select class="form-select" id="task_id_filter" name="task_id" <?php echo !$gradeTasks ? 'disabled' : ''; ?>>
+                      <?php if (!$gradeTasks): ?>
+                        <option value="">No grade items in this topic</option>
+                      <?php endif; ?>
+                      <?php foreach ($gradeTasks as $taskRow): ?>
+                        <option value="<?php echo (int) $taskRow['id']; ?>" <?php echo $selectedTask && (int) $selectedTask['id'] === (int) $taskRow['id'] ? 'selected' : ''; ?>>
+                          <?php echo e($taskRow['task_title']); ?>
+                        </option>
+                      <?php endforeach; ?>
+                    </select>
+                  </div>
+                  <div class="col-md-2">
+                    <button type="submit" class="btn btn-primary w-100" <?php echo !$gradeTasks ? 'disabled' : ''; ?>>Open</button>
+                  </div>
                 </div>
               </form>
 
+              <?php if (!$gradeTasks): ?>
+                <div class="empty-state">
+                  <i class="fa-solid fa-star-half-stroke"></i>
+                  <p>No grade items are saved under this topic yet. Go to Manage Topics and add a grade for this topic.</p>
+                </div>
+              <?php else: ?>
               <form method="post" class="module-form">
                 <input type="hidden" name="action" value="save_grades">
                 <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
                 <input type="hidden" name="tool" value="grades">
+                <input type="hidden" name="topic_id" value="<?php echo $selectedGradeTopicId; ?>">
                 <input type="hidden" name="task_id" value="<?php echo $selectedTask ? (int) $selectedTask['id'] : 0; ?>">
                 <div class="table-responsive">
                   <table class="table align-middle">
@@ -2653,6 +3109,7 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
                   <i class="fa-solid fa-floppy-disk me-2"></i>Save Grades
                 </button>
               </form>
+              <?php endif; ?>
             <?php endif; ?>
           </div>
         <?php endif; ?>
@@ -2925,8 +3382,10 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
             <input type="hidden" name="tool" value="tasks">
             <div class="mb-3">
               <label class="form-label" for="task_topic_id">Class topic</label>
-              <select class="form-select" id="task_topic_id" name="task_topic_id">
-                <option value="0">Unassigned</option>
+              <select class="form-select" id="task_topic_id" name="task_topic_id" required>
+                <?php if (!$materialFolders): ?>
+                  <option value="">Add a topic first</option>
+                <?php endif; ?>
                 <?php foreach ($materialFolders as $folder): ?>
                   <option value="<?php echo (int) $folder['id']; ?>"><?php echo e($folder['name']); ?></option>
                 <?php endforeach; ?>
@@ -2947,7 +3406,7 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
           </div>
           <div class="modal-footer">
             <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
-            <button type="submit" class="btn btn-primary">Save Grade</button>
+            <button type="submit" class="btn btn-primary" <?php echo !$materialFolders ? 'disabled' : ''; ?>>Save Grade</button>
           </div>
         </form>
       </div>

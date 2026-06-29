@@ -435,4 +435,20 @@ $(function () {
       $('.material-draggable-card').removeClass('is-dragging');
     });
   });
+
+  $(document).on('click', '.copy-enrollment-link', function () {
+    var link = $(this).attr('data-link') || '';
+
+    if (link === '') {
+      return;
+    }
+
+    navigator.clipboard.writeText(link).then(function () {
+      if (window.Swal) {
+        Swal.fire('Copied', 'Enrollment link copied to clipboard.', 'success');
+      }
+    }).catch(function () {
+      window.prompt('Copy enrollment link', link);
+    });
+  });
 });

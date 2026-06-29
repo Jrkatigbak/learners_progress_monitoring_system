@@ -24,15 +24,17 @@ function learnerCanOpenAssignment(PDO $pdo, int $learnerId, int $assignmentId): 
     $statement = $pdo->prepare(
         "SELECT class_assignments.*, classes.class_name, classes.id AS class_id
          FROM class_assignments
-         INNER JOIN classes ON classes.id = class_assignments.class_id
-         INNER JOIN learners ON learners.id = :learner_id
-         LEFT JOIN courses ON courses.course_code = CONCAT('CLASS-', classes.id)
+         INNER JOIN classes ON classes.id = class_assignments.class_id AND classes.deleted_at IS NULL
+         INNER JOIN learners ON learners.id = :learner_id AND learners.deleted_at IS NULL
+         LEFT JOIN courses ON courses.course_code = CONCAT('CLASS-', classes.id) AND courses.deleted_at IS NULL
          LEFT JOIN course_enrollments
            ON course_enrollments.course_id = courses.id
           AND course_enrollments.learner_id = learners.id
           AND course_enrollments.enrollment_status IN ('Enrolled', 'In Progress', 'Completed')
+          AND course_enrollments.deleted_at IS NULL
          WHERE class_assignments.id = :assignment_id
            AND class_assignments.status = 'Active'
+           AND class_assignments.deleted_at IS NULL
            AND (
              learners.class_id = classes.id
              OR course_enrollments.id IS NOT NULL
@@ -81,6 +83,7 @@ $learnerStatement = $pdo->prepare(
     'SELECT id, learner_number, first_name, last_name, email, profile_photo
      FROM learners
      WHERE email = :email
+       AND deleted_at IS NULL
      LIMIT 1'
 );
 $learnerStatement->execute(['email' => $currentUser['email']]);
@@ -95,7 +98,7 @@ if ($learner && $assignmentId > 0) {
     $activeAssignment = learnerCanOpenAssignment($pdo, (int) $learner['id'], $assignmentId);
 
     if ($activeAssignment) {
-        $submissionStatement = $pdo->prepare('SELECT * FROM assignment_submissions WHERE assignment_id = :assignment_id AND learner_id = :learner_id LIMIT 1');
+        $submissionStatement = $pdo->prepare('SELECT * FROM assignment_submissions WHERE assignment_id = :assignment_id AND learner_id = :learner_id AND deleted_at IS NULL LIMIT 1');
         $submissionStatement->execute([
             'assignment_id' => (int) $activeAssignment['id'],
             'learner_id' => (int) $learner['id'],
@@ -186,17 +189,20 @@ if ($learner && !$activeAssignment) {
                 classes.class_name,
                 assignment_submissions.submitted_at
          FROM class_assignments
-         INNER JOIN classes ON classes.id = class_assignments.class_id
-         INNER JOIN learners ON learners.id = :learner_id
-         LEFT JOIN courses ON courses.course_code = CONCAT('CLASS-', classes.id)
+         INNER JOIN classes ON classes.id = class_assignments.class_id AND classes.deleted_at IS NULL
+         INNER JOIN learners ON learners.id = :learner_id AND learners.deleted_at IS NULL
+         LEFT JOIN courses ON courses.course_code = CONCAT('CLASS-', classes.id) AND courses.deleted_at IS NULL
          LEFT JOIN course_enrollments
            ON course_enrollments.course_id = courses.id
           AND course_enrollments.learner_id = learners.id
           AND course_enrollments.enrollment_status IN ('Enrolled', 'In Progress', 'Completed')
+          AND course_enrollments.deleted_at IS NULL
          LEFT JOIN assignment_submissions
            ON assignment_submissions.assignment_id = class_assignments.id
           AND assignment_submissions.learner_id = learners.id
+          AND assignment_submissions.deleted_at IS NULL
          WHERE class_assignments.status = 'Active'
+           AND class_assignments.deleted_at IS NULL
            AND (
              learners.class_id = classes.id
              OR course_enrollments.id IS NOT NULL

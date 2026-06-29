@@ -17,6 +17,7 @@ $learnerStatement = $pdo->prepare(
     'SELECT id, learner_number, first_name, last_name, email, phone, status, profile_photo
      FROM learners
      WHERE email = :email
+       AND deleted_at IS NULL
      LIMIT 1'
 );
 $learnerStatement->execute(['email' => $currentUser['email']]);
@@ -37,10 +38,11 @@ if ($learner) {
                 course_enrollments.enrollment_status,
                 course_enrollments.enrolled_at
          FROM course_enrollments
-         INNER JOIN courses ON courses.id = course_enrollments.course_id
+         INNER JOIN courses ON courses.id = course_enrollments.course_id AND courses.deleted_at IS NULL
          WHERE course_enrollments.learner_id = :learner_id
            AND courses.status = 'Active'
            AND course_enrollments.enrollment_status IN ('Enrolled', 'In Progress', 'Completed')
+           AND course_enrollments.deleted_at IS NULL
          ORDER BY courses.course_name"
     );
     $coursesStatement->execute(['learner_id' => (int) $learner['id']]);
@@ -60,10 +62,11 @@ if ($learner) {
                     learners.email,
                     learners.profile_photo
              FROM course_enrollments
-             INNER JOIN learners ON learners.id = course_enrollments.learner_id
+             INNER JOIN learners ON learners.id = course_enrollments.learner_id AND learners.deleted_at IS NULL
              WHERE course_enrollments.course_id IN ({$placeholders})
                AND learners.id <> ?
                AND course_enrollments.enrollment_status IN ('Enrolled', 'In Progress', 'Completed')
+               AND course_enrollments.deleted_at IS NULL
              ORDER BY learners.first_name, learners.last_name"
         );
         $classmatesStatement->execute([...$courseIds, (int) $learner['id']]);

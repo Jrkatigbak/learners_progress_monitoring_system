@@ -1,0 +1,17 @@
+{
+    "brand_name": "Kiwi Digital",
+    "system_name": "Learners Progress Monitoring System",
+    "logo_path": "images/kiwi-logo.png",
+    "colors": {
+        "primary": "#f58220",
+        "primary_dark": "#d96500",
+        "success": "#4c8f17",
+        "success_dark": "#2f6f11",
+        "warning": "#f7c84b",
+        "danger": "#dc3545",
+        "text": "#252019",
+        "muted_text": "#7d756c",
+        "soft_background": "#fffaf2",
+        "border": "#f0e4d2"
+    }
+}

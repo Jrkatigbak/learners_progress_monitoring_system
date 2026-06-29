@@ -20,6 +20,7 @@ function syncClassEnrollmentCourse(PDO $pdo, int $classId): ?array
         'SELECT id, class_name, status, description
          FROM classes
          WHERE id = :id
+           AND deleted_at IS NULL
          LIMIT 1'
     );
     $classStatement->execute(['id' => $classId]);
@@ -36,7 +37,8 @@ function syncClassEnrollmentCourse(PDO $pdo, int $classId): ?array
          ON DUPLICATE KEY UPDATE
             course_name = VALUES(course_name),
             description = VALUES(description),
-            status = VALUES(status)'
+            status = VALUES(status),
+            deleted_at = NULL'
     );
     $courseStatement->execute([
         'course_code' => $courseCode,
@@ -45,7 +47,7 @@ function syncClassEnrollmentCourse(PDO $pdo, int $classId): ?array
         'status' => $class['status'],
     ]);
 
-    $lookupStatement = $pdo->prepare('SELECT id FROM courses WHERE course_code = :course_code LIMIT 1');
+    $lookupStatement = $pdo->prepare('SELECT id FROM courses WHERE course_code = :course_code AND deleted_at IS NULL LIMIT 1');
     $lookupStatement->execute(['course_code' => $courseCode]);
     $courseId = (int) $lookupStatement->fetchColumn();
 
@@ -92,7 +94,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'INSERT INTO course_enrollments (learner_id, course_id, enrollment_status)
                      VALUES (:learner_id, :course_id, :enrollment_status)
                      ON DUPLICATE KEY UPDATE
-                        enrollment_status = VALUES(enrollment_status)'
+                        enrollment_status = VALUES(enrollment_status),
+                        deleted_at = NULL'
                 );
                 $enrollmentStatement->execute([
                     'learner_id' => $learnerId,
@@ -121,7 +124,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $statusStatement = $pdo->prepare(
                 'UPDATE course_enrollments
                  SET enrollment_status = :enrollment_status
-                 WHERE id = :id'
+                 WHERE id = :id AND deleted_at IS NULL'
             );
             $statusStatement->execute([
                 'enrollment_status' => $newStatus,
@@ -134,8 +137,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if ($action === 'delete_enrollment') {
-        // Delete enrollment through POST so a normal page visit cannot remove records.
-        $deleteStatement = $pdo->prepare('DELETE FROM course_enrollments WHERE id = :id');
+        // Soft delete enrollment through POST so a normal page visit cannot remove records.
+        $deleteStatement = $pdo->prepare('UPDATE course_enrollments SET deleted_at = NOW() WHERE id = :id AND deleted_at IS NULL');
         $deleteStatement->execute(['id' => (int) ($_POST['id'] ?? 0)]);
 
         header('Location: enrollments.php?success=deleted' . ($redirectClass > 0 ? '&class_id=' . $redirectClass : ''));
@@ -146,6 +149,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 $learners = $pdo->query(
     "SELECT id, learner_number, first_name, last_name
      FROM learners
+     WHERE deleted_at IS NULL
      ORDER BY first_name, last_name"
 )->fetchAll();
 $classIdFilter = (int) ($_GET['class_id'] ?? ($_POST['class_id'] ?? 0));
@@ -171,8 +175,9 @@ $classes = $pdo->query(
             SUM(CASE WHEN course_enrollments.enrollment_status = 'Pending' THEN 1 ELSE 0 END) AS pending_count,
             SUM(CASE WHEN course_enrollments.enrollment_status IN ('Enrolled', 'In Progress', 'Completed') THEN 1 ELSE 0 END) AS approved_count
      FROM classes
-     LEFT JOIN courses ON courses.course_code = CONCAT('CLASS-', classes.id)
-     LEFT JOIN course_enrollments ON course_enrollments.course_id = courses.id
+     LEFT JOIN courses ON courses.course_code = CONCAT('CLASS-', classes.id) AND courses.deleted_at IS NULL
+     LEFT JOIN course_enrollments ON course_enrollments.course_id = courses.id AND course_enrollments.deleted_at IS NULL
+     WHERE classes.deleted_at IS NULL
      GROUP BY classes.id, classes.class_name, classes.status, courses.id, courses.course_code
      ORDER BY classes.class_name"
 )->fetchAll();
@@ -197,12 +202,12 @@ $enrollmentSql = "SELECT course_enrollments.id,
             courses.course_code,
             courses.course_name
      FROM course_enrollments
-     INNER JOIN learners ON learners.id = course_enrollments.learner_id
-     INNER JOIN courses ON courses.id = course_enrollments.course_id
-     LEFT JOIN classes ON courses.course_code = CONCAT('CLASS-', classes.id)";
+     INNER JOIN learners ON learners.id = course_enrollments.learner_id AND learners.deleted_at IS NULL
+     INNER JOIN courses ON courses.id = course_enrollments.course_id AND courses.deleted_at IS NULL
+     LEFT JOIN classes ON courses.course_code = CONCAT('CLASS-', classes.id) AND classes.deleted_at IS NULL";
 
 if ($courseIdFilter > 0 && $selectedClass) {
-    $enrollmentWhere = ' WHERE courses.id = :course_id';
+    $enrollmentWhere = ' WHERE courses.id = :course_id AND course_enrollments.deleted_at IS NULL';
     $enrollmentParams = ['course_id' => $courseIdFilter];
 
     if ($search !== '') {
@@ -249,28 +254,7 @@ $successMessages = [
 </head>
 <body class="dashboard-page">
   <div class="app-layout">
-    <aside class="sidebar">
-      <a class="sidebar-brand" href="dashboard.php">
-        <img src="images/kiwi-logo.png" alt="Kiwi Digital Tech Inc." class="brand-logo">
-        <span>
-          <strong>Kiwi Digital</strong>
-          <!-- Keep the system name visible in the enrollment navigation. -->
-          <small>Learners Progress Monitoring System</small>
-        </span>
-      </a>
-      <nav class="sidebar-nav">
-        <a href="dashboard.php"><i class="fa-solid fa-gauge-high"></i> Dashboard</a>
-        <a href="classes.php"><i class="fa-solid fa-chalkboard-user"></i> Classes</a>
-        <a href="teachers.php"><i class="fa-solid fa-user-tie"></i> Teachers</a>
-        <a href="learners.php"><i class="fa-solid fa-users"></i> Learners</a>
-        <a href="grades.php"><i class="fa-solid fa-star"></i> Grades</a>
-        <a class="active" href="enrollments.php"><i class="fa-solid fa-book-open-reader"></i> Enrollments</a>
-      </nav>
-      <div class="sidebar-footer">
-        <p class="mb-1">Logged in as</p>
-        <strong><?php echo e($currentUser['name']); ?></strong>
-      </div>
-    </aside>
+    <?php $activeSidebarItem = 'enrollments'; require __DIR__ . '/includes/admin_sidebar.php'; ?>
 
     <main class="main-panel">
       <header class="topbar">
