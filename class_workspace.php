@@ -543,7 +543,7 @@ $courseId = classCourseId($pdo, $class);
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
 
-    if ($action === 'ajax_save_grade_other_remarks') {
+    if (in_array($action, ['ajax_save_grade_other_remarks', 'ajax_save_grade_score'], true)) {
         header('Content-Type: application/json');
 
         $taskId = (int) ($_POST['task_id'] ?? 0);
@@ -551,11 +551,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $scoreValue = trim((string) ($_POST['score'] ?? ''));
         $resultRemark = trim((string) ($_POST['result_remark'] ?? ''));
         $otherRemark = trim((string) ($_POST['other_remarks'] ?? ''));
-
-        if (empty($learnerGradeColumns['other_remarks'])) {
-            echo json_encode(['ok' => false, 'message' => 'Other remarks storage is not available.']);
-            exit;
-        }
 
         $taskStatement = $pdo->prepare('SELECT * FROM class_tasks WHERE id = :id AND class_id = :class_id AND deleted_at IS NULL LIMIT 1');
         $taskStatement->execute([
@@ -603,14 +598,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'class_id' => $classId,
         ]);
         $existingGradeId = (int) $existingStatement->fetchColumn();
+        $taskMaxScore = max(1.0, (float) ($task['max_score'] ?? 100));
+        $score = $scoreValue !== '' ? (float) $scoreValue : null;
+
+        if ($score !== null && ($score < 1 || $score > $taskMaxScore)) {
+            echo json_encode(['ok' => false, 'message' => 'Grade is outside the allowed range.']);
+            exit;
+        }
 
         if ($existingGradeId > 0) {
-            $updateRemark = $pdo->prepare('UPDATE learner_grades SET remarks = :remarks, other_remarks = :other_remarks WHERE id = :id');
-            $updateRemark->execute([
+            $setSql = 'remarks = :remarks';
+            $updateParams = [
                 'remarks' => $resultRemark !== '' ? $resultRemark : null,
-                'other_remarks' => $otherRemark !== '' ? $otherRemark : null,
                 'id' => $existingGradeId,
-            ]);
+            ];
+
+            if ($score !== null) {
+                $setSql .= ', score = :score, max_score = :max_score, graded_at = :graded_at, grade_title = :grade_title, created_by_user_id = :created_by_user_id';
+                $updateParams['score'] = $score;
+                $updateParams['max_score'] = $taskMaxScore;
+                $updateParams['graded_at'] = date('Y-m-d');
+                $updateParams['grade_title'] = $task['task_title'];
+                $updateParams['created_by_user_id'] = (int) $currentUser['id'];
+            }
+
+            if (!empty($learnerGradeColumns['other_remarks'])) {
+                $setSql .= ', other_remarks = :other_remarks';
+                $updateParams['other_remarks'] = $otherRemark !== '' ? $otherRemark : null;
+            }
+
+            $updateRemark = $pdo->prepare('UPDATE learner_grades SET ' . $setSql . ' WHERE id = :id');
+            $updateRemark->execute($updateParams);
 
             echo json_encode(['ok' => true, 'grade_id' => $existingGradeId, 'message' => 'Saved']);
             exit;
@@ -621,21 +639,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             exit;
         }
 
-        $taskMaxScore = max(1.0, (float) ($task['max_score'] ?? 100));
-        $score = (float) $scoreValue;
-
-        if ($score < 1 || $score > $taskMaxScore) {
-            echo json_encode(['ok' => false, 'message' => 'Grade is outside the allowed range.']);
-            exit;
-        }
-
-        $insertRemark = $pdo->prepare(
-            'INSERT INTO learner_grades
-                (task_id, learner_id, class_id, teacher_id, grade_title, score, max_score, remarks, other_remarks, graded_at, created_by_user_id)
-             VALUES
-                (:task_id, :learner_id, :class_id, :teacher_id, :grade_title, :score, :max_score, :remarks, :other_remarks, :graded_at, :created_by_user_id)'
-        );
-        $insertRemark->execute([
+        $insertColumns = 'task_id, learner_id, class_id, teacher_id, grade_title, score, max_score, remarks, graded_at, created_by_user_id';
+        $insertValues = ':task_id, :learner_id, :class_id, :teacher_id, :grade_title, :score, :max_score, :remarks, :graded_at, :created_by_user_id';
+        $insertParams = [
             'task_id' => $taskId,
             'learner_id' => $learnerId,
             'class_id' => $classId,
@@ -644,10 +650,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'score' => $score,
             'max_score' => $taskMaxScore,
             'remarks' => $resultRemark !== '' ? $resultRemark : null,
-            'other_remarks' => $otherRemark !== '' ? $otherRemark : null,
             'graded_at' => date('Y-m-d'),
             'created_by_user_id' => (int) $currentUser['id'],
-        ]);
+        ];
+
+        if (!empty($learnerGradeColumns['other_remarks'])) {
+            $insertColumns = 'task_id, learner_id, class_id, teacher_id, grade_title, score, max_score, remarks, other_remarks, graded_at, created_by_user_id';
+            $insertValues = ':task_id, :learner_id, :class_id, :teacher_id, :grade_title, :score, :max_score, :remarks, :other_remarks, :graded_at, :created_by_user_id';
+            $insertParams['other_remarks'] = $otherRemark !== '' ? $otherRemark : null;
+        }
+        $insertRemark = $pdo->prepare(
+            'INSERT INTO learner_grades
+                (' . $insertColumns . ')
+             VALUES
+                (' . $insertValues . ')'
+        );
+        $insertRemark->execute($insertParams);
 
         echo json_encode(['ok' => true, 'grade_id' => (int) $pdo->lastInsertId(), 'message' => 'Saved']);
         exit;
@@ -2529,7 +2547,7 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=20260629-grade-status-remarks" rel="stylesheet">
+  <link href="css/style.css?v=20260629-grade-score-autosave" rel="stylesheet">
   <?php echo kiwiSystemThemeStyle(); ?>
 </head>
 <body class="dashboard-page class-workspace-page class-workspace-<?php echo e($tool); ?>">
@@ -4310,6 +4328,6 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
       }
     })();
   </script>
-  <script src="js/app.js?v=20260629-grade-status-remarks"></script>
+  <script src="js/app.js?v=20260629-grade-score-autosave"></script>
 </body>
 </html>

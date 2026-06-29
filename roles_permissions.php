@@ -244,7 +244,7 @@ $selectedRolePermissions = $selectedPermissionRole ? ($rolePermissions[(string) 
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=20260629-grade-status-remarks" rel="stylesheet">
+  <link href="css/style.css?v=20260629-grade-score-autosave" rel="stylesheet">
   <?php echo kiwiSystemThemeStyle(); ?>
 </head>
 <body class="dashboard-page">
@@ -447,6 +447,6 @@ $selectedRolePermissions = $selectedPermissionRole ? ($rolePermissions[(string) 
       });
     })();
   </script>
-  <script src="js/app.js?v=20260629-grade-status-remarks"></script>
+  <script src="js/app.js?v=20260629-grade-score-autosave"></script>
 </body>
 </html>

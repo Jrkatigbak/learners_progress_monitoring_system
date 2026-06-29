@@ -381,6 +381,48 @@ $(function () {
     validateGradeSettings($(this));
   });
 
+  var gradeAutosaveTimers = {};
+
+  function scheduleGradeRowAutosave($row, action) {
+    var $scoreInput = $row.find('.grade-score-input');
+    var $remarksInput = $row.find('.grade-other-remarks-input');
+    var $status = $row.find('.grade-autosave-status');
+    var learnerId = $remarksInput.attr('data-learner-id') || '';
+    var timerKey = (action || 'grade-row') + '-' + (learnerId || $remarksInput.attr('name') || 'grade-row');
+
+    window.clearTimeout(gradeAutosaveTimers[timerKey]);
+    $status.removeClass('text-success text-danger').addClass('text-secondary').text('Saving...');
+
+    gradeAutosaveTimers[timerKey] = window.setTimeout(function () {
+      $.ajax({
+        method: 'POST',
+        url: window.location.href,
+        dataType: 'json',
+        data: {
+          action: action,
+          class_id: $('input[name="class_id"]').first().val() || '',
+          task_id: $remarksInput.attr('data-task-id') || $('input[name="task_id"]').val() || '',
+          learner_id: learnerId,
+          score: $scoreInput.val() || '',
+          result_remark: $row.find('.grade-result-input').val() || '',
+          other_remarks: $remarksInput.val() || ''
+        }
+      }).done(function (response) {
+        if (response && response.ok) {
+          if (response.grade_id) {
+            $remarksInput.attr('data-grade-id', response.grade_id);
+          }
+          $status.removeClass('text-secondary text-danger').addClass('text-success').text('Saved');
+          return;
+        }
+
+        $status.removeClass('text-secondary text-success').addClass('text-danger').text((response && response.message) || 'Not saved');
+      }).fail(function () {
+        $status.removeClass('text-secondary text-success').addClass('text-danger').text('Not saved');
+      });
+    }, 500);
+  }
+
   $(document).on('input', '.grade-score-input', function () {
     var $scoreInput = $(this);
     var $row = $scoreInput.closest('tr');
@@ -399,6 +441,9 @@ $(function () {
         .removeClass('text-bg-success text-bg-danger')
         .addClass('text-bg-secondary')
         .text('No result');
+      if (scoreValue) {
+        scheduleGradeRowAutosave($row, 'ajax_save_grade_score');
+      }
       return;
     }
 
@@ -408,48 +453,12 @@ $(function () {
       .removeClass('text-bg-success text-bg-danger text-bg-secondary')
       .addClass(result === 'Pass' ? 'text-bg-success' : 'text-bg-danger')
       .text(result);
+
+    scheduleGradeRowAutosave($row, 'ajax_save_grade_score');
   });
 
-  var gradeRemarkSaveTimers = {};
-
   $(document).on('input', '.grade-other-remarks-input', function () {
-    var $input = $(this);
-    var $row = $input.closest('tr');
-    var learnerId = $input.attr('data-learner-id') || '';
-    var timerKey = learnerId || $input.attr('name') || 'grade-remark';
-    var $status = $row.find('.grade-autosave-status');
-
-    window.clearTimeout(gradeRemarkSaveTimers[timerKey]);
-    $status.removeClass('text-success text-danger').addClass('text-secondary').text('Saving...');
-
-    gradeRemarkSaveTimers[timerKey] = window.setTimeout(function () {
-      $.ajax({
-        method: 'POST',
-        url: window.location.href,
-        dataType: 'json',
-        data: {
-          action: 'ajax_save_grade_other_remarks',
-          class_id: $('input[name="class_id"]').first().val() || '',
-          task_id: $input.attr('data-task-id') || $('input[name="task_id"]').val() || '',
-          learner_id: learnerId,
-          score: $row.find('.grade-score-input').val() || '',
-          result_remark: $row.find('.grade-result-input').val() || '',
-          other_remarks: $input.val()
-        }
-      }).done(function (response) {
-        if (response && response.ok) {
-          if (response.grade_id) {
-            $input.attr('data-grade-id', response.grade_id);
-          }
-          $status.removeClass('text-secondary text-danger').addClass('text-success').text('Saved');
-          return;
-        }
-
-        $status.removeClass('text-secondary text-success').addClass('text-danger').text((response && response.message) || 'Not saved');
-      }).fail(function () {
-        $status.removeClass('text-secondary text-success').addClass('text-danger').text('Not saved');
-      });
-    }, 500);
+    scheduleGradeRowAutosave($(this).closest('tr'), 'ajax_save_grade_other_remarks');
   });
 
   $(document).on('click', '.edit-quiz-button', function () {
