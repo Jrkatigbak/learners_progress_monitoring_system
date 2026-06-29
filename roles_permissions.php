@@ -15,6 +15,12 @@ $permissionRows = [
     'grades' => ['label' => 'Grades', 'view' => 'grades.view', 'add' => 'grades.add', 'edit' => 'grades.edit', 'delete' => 'grades.delete'],
     'users' => ['label' => 'User Management', 'view' => 'users.view', 'add' => 'users.add', 'edit' => 'users.edit', 'delete' => 'users.delete'],
     'settings' => ['label' => 'System Settings', 'view' => 'settings.view', 'edit' => 'settings.edit'],
+    'class_learners' => ['module' => 'Class Workspace', 'label' => 'Manage Learners', 'view' => 'class_learners.view', 'add' => 'class_learners.add', 'edit' => 'class_learners.edit', 'delete' => 'class_learners.delete'],
+    'class_teachers' => ['module' => 'Class Workspace', 'label' => 'Manage Teachers', 'view' => 'class_teachers.view', 'add' => 'class_teachers.add', 'edit' => 'class_teachers.edit', 'delete' => 'class_teachers.delete'],
+    'class_materials' => ['module' => 'Class Workspace', 'label' => 'Class Materials', 'view' => 'class_materials.view', 'add' => 'class_materials.add', 'edit' => 'class_materials.edit', 'delete' => 'class_materials.delete'],
+    'class_quizzes' => ['module' => 'Class Workspace', 'label' => 'Class Quizzes', 'view' => 'class_quizzes.view', 'add' => 'class_quizzes.add', 'edit' => 'class_quizzes.edit', 'delete' => 'class_quizzes.delete'],
+    'class_assignments' => ['module' => 'Class Workspace', 'label' => 'Class Assignments', 'view' => 'class_assignments.view', 'add' => 'class_assignments.add', 'edit' => 'class_assignments.edit', 'delete' => 'class_assignments.delete'],
+    'class_grades' => ['module' => 'Class Workspace', 'label' => 'Class Grades', 'view' => 'class_grades.view', 'add' => 'class_grades.add', 'edit' => 'class_grades.edit', 'delete' => 'class_grades.delete'],
 ];
 
 function e(string $value): string
@@ -34,9 +40,9 @@ function adminSideRoleRows(PDO $pdo): array
     return $pdo->query(
         'SELECT *
          FROM roles
-         WHERE role_key NOT IN ("teacher", "learner")
+         WHERE role_key <> "learner"
            AND deleted_at IS NULL
-         ORDER BY FIELD(role_key, "admin", "staff"), role_name'
+         ORDER BY FIELD(role_key, "admin", "staff", "teacher"), role_name'
     )->fetchAll();
 }
 
@@ -79,7 +85,7 @@ foreach ($rolePermissionRows as $row) {
 }
 
 if ($editRoleId > 0) {
-    $roleStatement = $pdo->prepare('SELECT * FROM roles WHERE id = :id AND role_key NOT IN ("teacher", "learner") AND deleted_at IS NULL LIMIT 1');
+    $roleStatement = $pdo->prepare('SELECT * FROM roles WHERE id = :id AND role_key <> "learner" AND deleted_at IS NULL LIMIT 1');
     $roleStatement->execute(['id' => $editRoleId]);
     $formRole = $roleStatement->fetch() ?: $formRole;
     $formRolePermissions = $rolePermissions[(string) ($formRole['role_key'] ?? '')] ?? [];
@@ -99,8 +105,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $errors[] = 'Role name is required.';
         }
 
-        if (in_array($roleKey, ['teacher', 'learner'], true)) {
-            $errors[] = 'Teacher and learner are portal roles and cannot be used here.';
+        if ($roleKey === 'learner') {
+            $errors[] = 'Learner is a portal role and cannot be used here.';
         }
 
         $existingRole = null;
@@ -156,7 +162,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($action === 'save_permissions') {
         $roleId = (int) ($_POST['role_id'] ?? 0);
         $selectedPermissions = array_values(array_intersect(array_keys($permissionDefinitions), (array) ($_POST['permissions'] ?? [])));
-        $roleStatement = $pdo->prepare('SELECT * FROM roles WHERE id = :id AND role_key NOT IN ("teacher", "learner") AND deleted_at IS NULL LIMIT 1');
+        $roleStatement = $pdo->prepare('SELECT * FROM roles WHERE id = :id AND role_key <> "learner" AND deleted_at IS NULL LIMIT 1');
         $roleStatement->execute(['id' => $roleId]);
         $role = $roleStatement->fetch() ?: null;
 
@@ -244,7 +250,7 @@ $selectedRolePermissions = $selectedPermissionRole ? ($rolePermissions[(string) 
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=20260629-grade-score-autosave" rel="stylesheet">
+  <link href="css/style.css?v=20260629-class-role-permissions" rel="stylesheet">
   <?php echo kiwiSystemThemeStyle(); ?>
 </head>
 <body class="dashboard-page">
@@ -400,7 +406,7 @@ $selectedRolePermissions = $selectedPermissionRole ? ($rolePermissions[(string) 
                   <tbody>
                     <?php foreach ($permissionRows as $moduleKey => $row): ?>
                       <tr>
-                        <td><strong><?php echo e(ucfirst($moduleKey === 'users' ? 'Administration' : $row['label'])); ?></strong></td>
+                        <td><strong><?php echo e($row['module'] ?? ucfirst($moduleKey === 'users' ? 'Administration' : $row['label'])); ?></strong></td>
                         <td><?php echo e($row['label']); ?></td>
                         <?php foreach (['view', 'add', 'edit', 'delete'] as $actionName): ?>
                           <td class="text-center">
@@ -447,6 +453,6 @@ $selectedRolePermissions = $selectedPermissionRole ? ($rolePermissions[(string) 
       });
     })();
   </script>
-  <script src="js/app.js?v=20260629-grade-score-autosave"></script>
+  <script src="js/app.js?v=20260629-class-role-permissions"></script>
 </body>
 </html>

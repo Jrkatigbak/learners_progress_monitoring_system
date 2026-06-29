@@ -34,7 +34,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=20260629-grade-score-autosave" rel="stylesheet">
+  <link href="css/style.css?v=20260629-class-role-permissions" rel="stylesheet">
 </head>
 <body class="auth-page">
   <button class="theme-toggle auth-theme-toggle" id="themeToggle" type="button" aria-label="Switch to dark mode" aria-pressed="false">
@@ -92,6 +92,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
   <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-  <script src="js/app.js?v=20260629-grade-score-autosave"></script>
+  <script src="js/app.js?v=20260629-class-role-permissions"></script>
 </body>
 </html>

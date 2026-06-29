@@ -424,6 +424,81 @@ function replaceQuizQuestions(PDO $pdo, int $quizId, array $preparedQuestions): 
     }
 }
 
+function classWorkspaceCan(PDO $pdo, bool $isAdmin, string $permission): bool
+{
+    if ($isAdmin) {
+        return true;
+    }
+
+    $user = $_SESSION['user'] ?? null;
+
+    // Existing teacher accounts keep access until the Teacher role gets an explicit permission set.
+    if (($user['role'] ?? '') === 'teacher' && kiwiUserPermissions($pdo, $user) === []) {
+        return true;
+    }
+
+    return kiwiCan($pdo, $permission, $user);
+}
+
+function classWorkspaceCanAny(PDO $pdo, bool $isAdmin, array $permissions): bool
+{
+    foreach ($permissions as $permission) {
+        if (classWorkspaceCan($pdo, $isAdmin, $permission)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+function classWorkspaceToolPermission(string $tool): string
+{
+    $toolPermissions = [
+        'learners' => 'class_learners.view',
+        'teachers' => 'class_teachers.view',
+        'materials' => 'class_materials.view',
+        'quizzes' => 'class_quizzes.view',
+        'assignments' => 'class_assignments.view',
+        'grades' => 'class_grades.view',
+    ];
+
+    return $toolPermissions[$tool] ?? '';
+}
+
+function classWorkspaceActionPermissions(string $action): array
+{
+    $rules = [
+        'approve_enrollment_request' => ['any' => ['class_learners.edit']],
+        'disapprove_enrollment_request' => ['any' => ['class_learners.edit']],
+        'reset_learner_credentials' => ['any' => ['class_learners.edit']],
+        'remove_class_learner' => ['any' => ['class_learners.delete']],
+        'add_class_learners' => ['any' => ['class_learners.add']],
+        'add_class_teachers' => ['any' => ['class_teachers.add']],
+        'remove_class_teacher' => ['any' => ['class_teachers.delete']],
+        'save_material' => ['any' => ['class_materials.add']],
+        'update_material' => ['any' => ['class_materials.edit']],
+        'move_material_topic' => ['any' => ['class_materials.edit']],
+        'delete_material' => ['any' => ['class_materials.delete']],
+        'save_quiz' => ['any' => ['class_quizzes.add']],
+        'update_quiz' => ['any' => ['class_quizzes.edit']],
+        'delete_quiz' => ['any' => ['class_quizzes.delete']],
+        'save_assignment' => ['any' => ['class_assignments.add']],
+        'delete_assignment' => ['any' => ['class_assignments.delete']],
+        'save_task' => ['any' => ['class_grades.add']],
+        'update_task' => ['any' => ['class_grades.edit']],
+        'delete_task' => ['any' => ['class_grades.delete']],
+        'save_grades' => ['any' => ['class_grades.edit']],
+        'ajax_save_grade_other_remarks' => ['any' => ['class_grades.edit']],
+        'ajax_save_grade_score' => ['any' => ['class_grades.edit']],
+        'save_material_folder' => ['any' => ['class_materials.add', 'class_quizzes.add', 'class_assignments.add', 'class_grades.add']],
+        'update_material_folder' => ['any' => ['class_materials.edit', 'class_quizzes.edit', 'class_assignments.edit', 'class_grades.edit']],
+        'move_material_folder' => ['any' => ['class_materials.edit', 'class_quizzes.edit', 'class_assignments.edit', 'class_grades.edit']],
+        'delete_material_folder' => ['any' => ['class_materials.delete', 'class_quizzes.delete', 'class_assignments.delete', 'class_grades.delete']],
+    ];
+
+    return $rules[$action] ?? [];
+}
+
 $classId = (int) ($_GET['class_id'] ?? $_POST['class_id'] ?? 0);
 $tool = $_GET['tool'] ?? $_POST['tool'] ?? 'dashboard';
 $allowedTools = ['dashboard', 'learners', 'teachers', 'materials', 'quizzes', 'assignments', 'tasks', 'grades'];
@@ -432,6 +507,7 @@ $errors = [];
 $success = $_GET['success'] ?? '';
 $selectedTopicId = (int) ($_GET['topic_id'] ?? $_POST['topic_id'] ?? 0);
 $isAdmin = $auth->isAdminSideUser();
+$isSystemAdmin = (($currentUser['role'] ?? '') === 'admin');
 $isTeacher = $auth->isTeacher();
 $teacherProfile = null;
 $materialUploadDirectory = __DIR__ . '/uploads/materials';
@@ -539,9 +615,62 @@ if ($isTeacher) {
 $activeTeacherId = $isTeacher && $teacherProfile ? (int) $teacherProfile['id'] : (int) ($primaryTeacher['id'] ?? 0);
 
 $courseId = classCourseId($pdo, $class);
+$classToolAccess = [
+    'dashboard' => true,
+    'learners' => classWorkspaceCan($pdo, $isSystemAdmin, 'class_learners.view'),
+    'teachers' => classWorkspaceCan($pdo, $isSystemAdmin, 'class_teachers.view'),
+    'materials' => classWorkspaceCan($pdo, $isSystemAdmin, 'class_materials.view'),
+    'quizzes' => classWorkspaceCan($pdo, $isSystemAdmin, 'class_quizzes.view'),
+    'assignments' => classWorkspaceCan($pdo, $isSystemAdmin, 'class_assignments.view'),
+    'tasks' => classWorkspaceCanAny($pdo, $isSystemAdmin, ['class_materials.view', 'class_quizzes.view', 'class_assignments.view', 'class_grades.view']),
+    'grades' => classWorkspaceCan($pdo, $isSystemAdmin, 'class_grades.view'),
+];
+
+if (empty($classToolAccess[$tool])) {
+    $fallbackTool = array_key_first(array_filter($classToolAccess));
+    if ($fallbackTool) {
+        header('Location: class_workspace.php?class_id=' . $classId . '&tool=' . $fallbackTool);
+        exit;
+    }
+
+    header('Location: ' . ($isTeacher ? 'teacher_dashboard.php' : 'classes.php'));
+    exit;
+}
+
+$canManageLearnersAdd = classWorkspaceCan($pdo, $isSystemAdmin, 'class_learners.add');
+$canManageLearnersEdit = classWorkspaceCan($pdo, $isSystemAdmin, 'class_learners.edit');
+$canManageLearnersDelete = classWorkspaceCan($pdo, $isSystemAdmin, 'class_learners.delete');
+$canManageTeachersAdd = classWorkspaceCan($pdo, $isSystemAdmin, 'class_teachers.add');
+$canManageTeachersDelete = classWorkspaceCan($pdo, $isSystemAdmin, 'class_teachers.delete');
+$canManageMaterialsAdd = classWorkspaceCan($pdo, $isSystemAdmin, 'class_materials.add');
+$canManageMaterialsEdit = classWorkspaceCan($pdo, $isSystemAdmin, 'class_materials.edit');
+$canManageMaterialsDelete = classWorkspaceCan($pdo, $isSystemAdmin, 'class_materials.delete');
+$canManageQuizzesAdd = classWorkspaceCan($pdo, $isSystemAdmin, 'class_quizzes.add');
+$canManageQuizzesEdit = classWorkspaceCan($pdo, $isSystemAdmin, 'class_quizzes.edit');
+$canManageQuizzesDelete = classWorkspaceCan($pdo, $isSystemAdmin, 'class_quizzes.delete');
+$canManageAssignmentsAdd = classWorkspaceCan($pdo, $isSystemAdmin, 'class_assignments.add');
+$canManageAssignmentsDelete = classWorkspaceCan($pdo, $isSystemAdmin, 'class_assignments.delete');
+$canManageGradesAdd = classWorkspaceCan($pdo, $isSystemAdmin, 'class_grades.add');
+$canManageGradesEdit = classWorkspaceCan($pdo, $isSystemAdmin, 'class_grades.edit');
+$canManageGradesDelete = classWorkspaceCan($pdo, $isSystemAdmin, 'class_grades.delete');
+$canManageTopicsAdd = classWorkspaceCanAny($pdo, $isSystemAdmin, ['class_materials.add', 'class_quizzes.add', 'class_assignments.add', 'class_grades.add']);
+$canManageTopicsEdit = classWorkspaceCanAny($pdo, $isSystemAdmin, ['class_materials.edit', 'class_quizzes.edit', 'class_assignments.edit', 'class_grades.edit']);
+$canManageTopicsDelete = classWorkspaceCanAny($pdo, $isSystemAdmin, ['class_materials.delete', 'class_quizzes.delete', 'class_assignments.delete', 'class_grades.delete']);
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
+    $actionRule = classWorkspaceActionPermissions($action);
+
+    if (!empty($actionRule['any']) && !classWorkspaceCanAny($pdo, $isSystemAdmin, $actionRule['any'])) {
+        if (strpos($action, 'ajax_') === 0 || strtolower($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '') === 'xmlhttprequest') {
+            header('Content-Type: application/json', true, 403);
+            echo json_encode(['ok' => false, 'message' => 'You do not have permission to do this action.']);
+            exit;
+        }
+
+        $errors[] = 'You do not have permission to do this action.';
+        $action = '__blocked';
+    }
 
     if (in_array($action, ['ajax_save_grade_other_remarks', 'ajax_save_grade_score'], true)) {
         header('Content-Type: application/json');
@@ -674,10 +803,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($action === 'approve_enrollment_request') {
         $requestId = (int) ($_POST['request_id'] ?? 0);
 
-        if (!$isAdmin) {
-            $errors[] = 'Only administrators can approve enrollment requests.';
-        }
-
         $requestStatement = $pdo->prepare(
             'SELECT *
              FROM class_enrollment_requests
@@ -730,10 +855,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($action === 'disapprove_enrollment_request') {
         $requestId = (int) ($_POST['request_id'] ?? 0);
 
-        if (!$isAdmin) {
-            $errors[] = 'Only administrators can disapprove enrollment requests.';
-        }
-
         $requestStatement = $pdo->prepare(
             'SELECT *
              FROM class_enrollment_requests
@@ -783,10 +904,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if ($action === 'reset_learner_credentials') {
         $learnerId = (int) ($_POST['learner_id'] ?? 0);
-
-        if (!$isAdmin) {
-            $errors[] = 'Only administrators can reset learner credentials.';
-        }
 
         $learnerStatement = $pdo->prepare(
             'SELECT DISTINCT learners.*
@@ -853,10 +970,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($action === 'remove_class_learner') {
         $learnerId = (int) ($_POST['learner_id'] ?? 0);
 
-        if (!$isAdmin) {
-            $errors[] = 'Only administrators can delete learners from a class.';
-        }
-
         $learnerStatement = $pdo->prepare(
             'SELECT DISTINCT learners.id
              FROM learners
@@ -919,10 +1032,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $selectedLearnerIds = array_map('intval', $_POST['learner_ids'] ?? []);
         $selectedLearnerIds = array_values(array_unique(array_filter($selectedLearnerIds)));
 
-        if (!$isAdmin) {
-            $errors[] = 'Only administrators can add learners to a class.';
-        }
-
         if (!$selectedLearnerIds) {
             $errors[] = 'Select at least one learner.';
         }
@@ -973,10 +1082,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($action === 'add_class_teachers') {
         $selectedTeacherIds = array_map('intval', $_POST['teacher_ids'] ?? []);
         $selectedTeacherIds = array_values(array_unique(array_filter($selectedTeacherIds)));
-
-        if (!$isAdmin) {
-            $errors[] = 'Only administrators can add teachers to a class.';
-        }
 
         if (!$selectedTeacherIds) {
             $errors[] = 'Select at least one teacher.';
@@ -1036,10 +1141,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if ($action === 'remove_class_teacher') {
         $teacherId = (int) ($_POST['teacher_id'] ?? 0);
-
-        if (!$isAdmin) {
-            $errors[] = 'Only administrators can remove teachers from a class.';
-        }
 
         if ($teacherId <= 0) {
             $errors[] = 'Select a valid teacher.';
@@ -2547,7 +2648,7 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=20260629-grade-score-autosave" rel="stylesheet">
+  <link href="css/style.css?v=20260629-class-role-permissions" rel="stylesheet">
   <?php echo kiwiSystemThemeStyle(); ?>
 </head>
 <body class="dashboard-page class-workspace-page class-workspace-<?php echo e($tool); ?>">
@@ -2561,14 +2662,30 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
         </span>
       </a>
       <nav class="sidebar-nav">
-        <a class="<?php echo $tool === 'dashboard' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=dashboard"><i class="fa-solid fa-gauge-high"></i> Class Dashboard</a>
-        <a class="<?php echo $tool === 'tasks' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=tasks"><i class="fa-solid fa-list-check"></i> Topics</a>
-        <a class="<?php echo $tool === 'learners' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=learners"><i class="fa-solid fa-users"></i> Learners</a>
-        <a class="<?php echo $tool === 'teachers' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=teachers"><i class="fa-solid fa-user-tie"></i> Teachers</a>
-        <a class="<?php echo $tool === 'materials' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=materials"><i class="fa-solid fa-folder-open"></i> Materials</a>
-        <a class="<?php echo $tool === 'quizzes' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=quizzes"><i class="fa-solid fa-circle-question"></i> Quizzes</a>
-        <a class="<?php echo $tool === 'assignments' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=assignments"><i class="fa-solid fa-file-pen"></i> Assignments</a>
-        <a class="<?php echo $tool === 'grades' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=grades"><i class="fa-solid fa-star"></i> Grades</a>
+        <?php if (!empty($classToolAccess['dashboard'])): ?>
+          <a class="<?php echo $tool === 'dashboard' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=dashboard"><i class="fa-solid fa-gauge-high"></i> Class Dashboard</a>
+        <?php endif; ?>
+        <?php if (!empty($classToolAccess['tasks'])): ?>
+          <a class="<?php echo $tool === 'tasks' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=tasks"><i class="fa-solid fa-list-check"></i> Topics</a>
+        <?php endif; ?>
+        <?php if (!empty($classToolAccess['learners'])): ?>
+          <a class="<?php echo $tool === 'learners' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=learners"><i class="fa-solid fa-users"></i> Learners</a>
+        <?php endif; ?>
+        <?php if (!empty($classToolAccess['teachers'])): ?>
+          <a class="<?php echo $tool === 'teachers' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=teachers"><i class="fa-solid fa-user-tie"></i> Teachers</a>
+        <?php endif; ?>
+        <?php if (!empty($classToolAccess['materials'])): ?>
+          <a class="<?php echo $tool === 'materials' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=materials"><i class="fa-solid fa-folder-open"></i> Materials</a>
+        <?php endif; ?>
+        <?php if (!empty($classToolAccess['quizzes'])): ?>
+          <a class="<?php echo $tool === 'quizzes' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=quizzes"><i class="fa-solid fa-circle-question"></i> Quizzes</a>
+        <?php endif; ?>
+        <?php if (!empty($classToolAccess['assignments'])): ?>
+          <a class="<?php echo $tool === 'assignments' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=assignments"><i class="fa-solid fa-file-pen"></i> Assignments</a>
+        <?php endif; ?>
+        <?php if (!empty($classToolAccess['grades'])): ?>
+          <a class="<?php echo $tool === 'grades' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=grades"><i class="fa-solid fa-star"></i> Grades</a>
+        <?php endif; ?>
         <a href="<?php echo $isTeacher ? 'teacher_dashboard.php' : 'classes.php'; ?>"><i class="fa-solid fa-arrow-left"></i> Back to Classes</a>
       </nav>
       <div class="sidebar-footer">
@@ -2727,10 +2844,10 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
               </div>
               <div class="d-flex flex-wrap align-items-center gap-2">
                 <span class="badge text-bg-primary"><?php echo count($learners); ?> total</span>
-                <?php if ($isAdmin): ?>
+                <?php if ($canManageLearnersEdit): ?>
                   <span class="badge text-bg-warning"><?php echo count($pendingEnrollmentRequests); ?> pending</span>
                 <?php endif; ?>
-                <?php if ($isAdmin): ?>
+                <?php if ($canManageLearnersAdd): ?>
                   <button type="button" class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#addClassLearnersModal">
                     <i class="fa-solid fa-user-plus me-2"></i>Add Learners
                   </button>
@@ -2738,7 +2855,7 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
               </div>
             </div>
 
-            <?php if ($isAdmin && !empty($class['enrollment_token'])): ?>
+            <?php if ($canManageLearnersAdd && !empty($class['enrollment_token'])): ?>
               <?php $enrollmentLink = kiwiEnrollmentUrl((string) $class['enrollment_token']); ?>
               <div class="enrollment-link-copy-bar mb-4">
                 <div>
@@ -2751,7 +2868,7 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
               </div>
             <?php endif; ?>
 
-            <?php if ($isAdmin && $pendingEnrollmentRequests): ?>
+            <?php if ($canManageLearnersEdit && $pendingEnrollmentRequests): ?>
               <div class="pending-enrollment-list mb-4">
                 <?php foreach ($pendingEnrollmentRequests as $request): ?>
                   <article class="pending-enrollment-card">
@@ -2806,7 +2923,7 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
                   <article class="learner-card">
                     <div class="learner-card-body">
                       <span class="learner-status-pill <?php echo $learner['status'] === 'Completed' ? 'is-completed' : ($learner['status'] === 'On Hold' ? 'is-hold' : 'is-active'); ?>"><?php echo e($learner['status']); ?></span>
-                      <?php if ($isAdmin): ?>
+                      <?php if ($canManageLearnersEdit): ?>
                         <form method="post" class="learner-card-reset-form credential-reset-form" data-confirm-message="Reset password and email new login credentials to this learner?">
                           <input type="hidden" name="action" value="reset_learner_credentials">
                           <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
@@ -2829,21 +2946,25 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
                       <h3><?php echo e($fullName); ?></h3>
                       <p class="learner-number"><?php echo e($learner['learner_number']); ?></p>
                     </div>
-                    <?php if ($isAdmin): ?>
+                    <?php if ($canManageLearnersEdit || $canManageLearnersDelete): ?>
                       <footer class="learner-card-footer">
                         <div class="learner-icon-actions">
-                          <a class="learner-icon-button" href="learners.php?edit=<?php echo (int) $learner['id']; ?>" aria-label="Edit learner">
-                            <i class="fa-solid fa-pen"></i>
-                          </a>
-                          <form method="post" onsubmit="return confirm('Delete this learner from this class?');">
-                            <input type="hidden" name="action" value="remove_class_learner">
-                            <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
-                            <input type="hidden" name="tool" value="learners">
-                            <input type="hidden" name="learner_id" value="<?php echo (int) $learner['id']; ?>">
-                            <button type="submit" class="learner-icon-button is-danger" aria-label="Delete learner from class">
-                              <i class="fa-solid fa-trash"></i>
-                            </button>
-                          </form>
+                          <?php if ($canManageLearnersEdit): ?>
+                            <a class="learner-icon-button" href="learners.php?edit=<?php echo (int) $learner['id']; ?>" aria-label="Edit learner">
+                              <i class="fa-solid fa-pen"></i>
+                            </a>
+                          <?php endif; ?>
+                          <?php if ($canManageLearnersDelete): ?>
+                            <form method="post" onsubmit="return confirm('Delete this learner from this class?');">
+                              <input type="hidden" name="action" value="remove_class_learner">
+                              <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
+                              <input type="hidden" name="tool" value="learners">
+                              <input type="hidden" name="learner_id" value="<?php echo (int) $learner['id']; ?>">
+                              <button type="submit" class="learner-icon-button is-danger" aria-label="Delete learner from class">
+                                <i class="fa-solid fa-trash"></i>
+                              </button>
+                            </form>
+                          <?php endif; ?>
                         </div>
                       </footer>
                     <?php endif; ?>
@@ -2863,7 +2984,7 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
               </div>
               <div class="d-flex flex-wrap align-items-center gap-2">
                 <span class="badge text-bg-primary"><?php echo count($assignedTeachers); ?> total</span>
-                <?php if ($isAdmin): ?>
+                <?php if ($canManageTeachersAdd): ?>
                   <button type="button" class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#addClassTeachersModal">
                     <i class="fa-solid fa-user-plus me-2"></i>Add Teachers
                   </button>
@@ -2902,7 +3023,7 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
                         <?php endif; ?>
                       </div>
                     </div>
-                    <?php if ($isAdmin): ?>
+                    <?php if ($canManageTeachersDelete): ?>
                       <footer class="teacher-card-footer">
                         <form method="post" onsubmit="return confirm('Remove this teacher from this class?');">
                           <input type="hidden" name="action" value="remove_class_teacher">
@@ -2930,9 +3051,11 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
 	                <h2 class="h5 mb-0"><?php echo $selectedTopic ? e($selectedTopic['name']) . ' resources' : 'Unassigned resources'; ?></h2>
               </div>
               <div class="d-flex flex-wrap align-items-center gap-2">
-                <button type="button" class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#materialModal">
-                  <i class="fa-solid fa-plus me-2"></i>Add Material
-                </button>
+                <?php if ($canManageMaterialsAdd): ?>
+                  <button type="button" class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#materialModal">
+                    <i class="fa-solid fa-plus me-2"></i>Add Material
+                  </button>
+                <?php endif; ?>
               </div>
             </div>
 
@@ -2980,7 +3103,7 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
                     $materialUrl = (string) ($material['external_url'] ?? '');
                     $openUrl = $materialPath !== '' ? $materialPath : $materialUrl;
                   ?>
-                  <article class="material-card material-draggable-card" draggable="true" data-material-id="<?php echo (int) $material['id']; ?>">
+                  <article class="material-card material-draggable-card" draggable="<?php echo $canManageMaterialsEdit ? 'true' : 'false'; ?>" data-material-id="<?php echo (int) $material['id']; ?>">
                     <div class="material-preview">
                       <?php if ($materialType === 'image' && $materialPath !== ''): ?>
                         <button type="button" class="class-image-view-button learner-photo-viewer-button" data-bs-toggle="modal" data-bs-target="#learnerPhotoModal" data-photo="<?php echo e($materialPath); ?>" data-name="<?php echo e($material['title']); ?>" aria-label="View <?php echo e($material['title']); ?>">
@@ -3003,18 +3126,22 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
 	                          <h3><?php echo e($material['title']); ?></h3>
 	                        </div>
 	                        <div class="d-flex align-items-center gap-2">
-	                          <button type="button" class="learner-icon-button edit-material-button" data-bs-toggle="modal" data-bs-target="#editMaterialModal" data-material-id="<?php echo (int) $material['id']; ?>" data-title="<?php echo e($material['title']); ?>" data-description="<?php echo e((string) ($material['description'] ?? '')); ?>" data-topic-id="<?php echo (int) ($material['folder_id'] ?? 0); ?>" data-external-url="<?php echo e((string) ($material['external_url'] ?? '')); ?>" aria-label="Edit material">
-	                            <i class="fa-solid fa-pen"></i>
-	                          </button>
-	                          <form method="post" onsubmit="return confirm('Delete this learning material?');">
-	                            <input type="hidden" name="action" value="delete_material">
-	                            <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
-	                            <input type="hidden" name="tool" value="materials">
-	                            <input type="hidden" name="material_id" value="<?php echo (int) $material['id']; ?>">
-	                            <button type="submit" class="learner-icon-button is-danger" aria-label="Delete material">
-	                              <i class="fa-solid fa-trash"></i>
+                            <?php if ($canManageMaterialsEdit): ?>
+	                            <button type="button" class="learner-icon-button edit-material-button" data-bs-toggle="modal" data-bs-target="#editMaterialModal" data-material-id="<?php echo (int) $material['id']; ?>" data-title="<?php echo e($material['title']); ?>" data-description="<?php echo e((string) ($material['description'] ?? '')); ?>" data-topic-id="<?php echo (int) ($material['folder_id'] ?? 0); ?>" data-external-url="<?php echo e((string) ($material['external_url'] ?? '')); ?>" aria-label="Edit material">
+	                              <i class="fa-solid fa-pen"></i>
 	                            </button>
-	                          </form>
+                            <?php endif; ?>
+                            <?php if ($canManageMaterialsDelete): ?>
+	                            <form method="post" onsubmit="return confirm('Delete this learning material?');">
+	                              <input type="hidden" name="action" value="delete_material">
+	                              <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
+	                              <input type="hidden" name="tool" value="materials">
+	                              <input type="hidden" name="material_id" value="<?php echo (int) $material['id']; ?>">
+	                              <button type="submit" class="learner-icon-button is-danger" aria-label="Delete material">
+	                                <i class="fa-solid fa-trash"></i>
+	                              </button>
+	                            </form>
+                            <?php endif; ?>
 	                        </div>
 	                      </div>
                       <?php if (!empty($material['description'])): ?>
@@ -3060,9 +3187,11 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
 	                <h2 class="h5 mb-0"><?php echo $selectedTopic ? e($selectedTopic['name']) . ' quizzes' : 'Multiple choice quizzes'; ?></h2>
 	              </div>
 	              <div class="d-flex flex-wrap align-items-center gap-2">
-	                <button type="button" class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#quizModal">
-	                  <i class="fa-solid fa-plus me-2"></i>Add Quiz
-	                </button>
+                  <?php if ($canManageQuizzesAdd): ?>
+	                  <button type="button" class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#quizModal">
+	                    <i class="fa-solid fa-plus me-2"></i>Add Quiz
+	                  </button>
+                  <?php endif; ?>
               </div>
             </div>
 
@@ -3113,18 +3242,22 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
                           <h3><?php echo e($quiz['title']); ?></h3>
                         </div>
                         <div class="d-flex align-items-center gap-2">
-                          <button type="button" class="learner-icon-button edit-quiz-button" data-bs-toggle="modal" data-bs-target="#editQuizModal" data-quiz-id="<?php echo (int) $quiz['id']; ?>" data-title="<?php echo e($quiz['title']); ?>" data-description="<?php echo e((string) ($quiz['description'] ?? '')); ?>" data-topic-id="<?php echo (int) ($quiz['folder_id'] ?? 0); ?>" data-timer-minutes="<?php echo (int) $quiz['timer_minutes']; ?>" data-status="<?php echo e((string) ($quiz['status'] ?? 'Active')); ?>" data-questions="<?php echo e((string) $quizQuestionsJson); ?>" aria-label="Edit quiz">
-                            <i class="fa-solid fa-pen"></i>
-                          </button>
-                          <form method="post" onsubmit="return confirm('Delete this quiz and all attempts?');">
-                            <input type="hidden" name="action" value="delete_quiz">
-                            <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
-                            <input type="hidden" name="tool" value="quizzes">
-                            <input type="hidden" name="quiz_id" value="<?php echo (int) $quiz['id']; ?>">
-                            <button type="submit" class="learner-icon-button is-danger" aria-label="Delete quiz">
-                              <i class="fa-solid fa-trash"></i>
+                          <?php if ($canManageQuizzesEdit): ?>
+                            <button type="button" class="learner-icon-button edit-quiz-button" data-bs-toggle="modal" data-bs-target="#editQuizModal" data-quiz-id="<?php echo (int) $quiz['id']; ?>" data-title="<?php echo e($quiz['title']); ?>" data-description="<?php echo e((string) ($quiz['description'] ?? '')); ?>" data-topic-id="<?php echo (int) ($quiz['folder_id'] ?? 0); ?>" data-timer-minutes="<?php echo (int) $quiz['timer_minutes']; ?>" data-status="<?php echo e((string) ($quiz['status'] ?? 'Active')); ?>" data-questions="<?php echo e((string) $quizQuestionsJson); ?>" aria-label="Edit quiz">
+                              <i class="fa-solid fa-pen"></i>
                             </button>
-                          </form>
+                          <?php endif; ?>
+                          <?php if ($canManageQuizzesDelete): ?>
+                            <form method="post" onsubmit="return confirm('Delete this quiz and all attempts?');">
+                              <input type="hidden" name="action" value="delete_quiz">
+                              <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
+                              <input type="hidden" name="tool" value="quizzes">
+                              <input type="hidden" name="quiz_id" value="<?php echo (int) $quiz['id']; ?>">
+                              <button type="submit" class="learner-icon-button is-danger" aria-label="Delete quiz">
+                                <i class="fa-solid fa-trash"></i>
+                              </button>
+                            </form>
+                          <?php endif; ?>
                         </div>
                       </div>
 	                      <?php if (!empty($quiz['description'])): ?>
@@ -3154,9 +3287,11 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
 	                <h2 class="h5 mb-0"><?php echo $selectedTopic ? e($selectedTopic['name']) . ' assignments' : 'Learner work requirements'; ?></h2>
 	              </div>
 	              <div class="d-flex flex-wrap align-items-center gap-2">
-	                <button type="button" class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#assignmentModal">
-	                  <i class="fa-solid fa-plus me-2"></i>Add Assignment
-	                </button>
+                  <?php if ($canManageAssignmentsAdd): ?>
+	                  <button type="button" class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#assignmentModal">
+	                    <i class="fa-solid fa-plus me-2"></i>Add Assignment
+	                  </button>
+                  <?php endif; ?>
               </div>
             </div>
 
@@ -3207,15 +3342,17 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
                           </span>
                           <h3><?php echo e($assignment['title']); ?></h3>
                         </div>
-                        <form method="post" onsubmit="return confirm('Delete this assignment and its submissions?');">
-                          <input type="hidden" name="action" value="delete_assignment">
-                          <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
-                          <input type="hidden" name="tool" value="assignments">
-                          <input type="hidden" name="assignment_id" value="<?php echo (int) $assignment['id']; ?>">
-                          <button type="submit" class="learner-icon-button is-danger" aria-label="Delete assignment">
-                            <i class="fa-solid fa-trash"></i>
-                          </button>
-                        </form>
+                        <?php if ($canManageAssignmentsDelete): ?>
+                          <form method="post" onsubmit="return confirm('Delete this assignment and its submissions?');">
+                            <input type="hidden" name="action" value="delete_assignment">
+                            <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
+                            <input type="hidden" name="tool" value="assignments">
+                            <input type="hidden" name="assignment_id" value="<?php echo (int) $assignment['id']; ?>">
+                            <button type="submit" class="learner-icon-button is-danger" aria-label="Delete assignment">
+                              <i class="fa-solid fa-trash"></i>
+                            </button>
+                          </form>
+                        <?php endif; ?>
                       </div>
 	                      <?php if (!empty($assignment['instructions'])): ?>
 	                        <p><?php echo e($assignment['instructions']); ?></p>
@@ -3249,9 +3386,11 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
                 <span class="section-kicker">Topics</span>
                 <h2 class="h5 mb-0">Class topic library</h2>
               </div>
-              <button type="button" class="btn btn-sm btn-outline-primary add-topic-button" data-bs-toggle="modal" data-bs-target="#materialFolderModal" data-return-tool="tasks">
-                <i class="fa-solid fa-plus me-2"></i>Add Topic
-              </button>
+              <?php if ($canManageTopicsAdd): ?>
+                <button type="button" class="btn btn-sm btn-outline-primary add-topic-button" data-bs-toggle="modal" data-bs-target="#materialFolderModal" data-return-tool="tasks">
+                  <i class="fa-solid fa-plus me-2"></i>Add Topic
+                </button>
+              <?php endif; ?>
             </div>
             <?php if (!$materialFolders): ?>
               <div class="empty-state">
@@ -3286,42 +3425,48 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
                       </div>
                     </a>
                     <footer class="class-card-footer topic-card-actions">
-                      <div class="class-order-actions" aria-label="Reorder <?php echo e($folder['name']); ?> topic">
-                        <form method="post">
-                          <input type="hidden" name="action" value="move_material_folder">
-                          <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
-                          <input type="hidden" name="folder_id" value="<?php echo (int) $folder['id']; ?>">
-                          <input type="hidden" name="direction" value="up">
-                          <button type="submit" class="learner-icon-button topic-order-button" <?php echo $topicIndex === 0 ? 'disabled' : ''; ?> aria-label="Move topic up">
-                            <i class="fa-solid fa-arrow-up"></i>
-                          </button>
-                        </form>
-                        <form method="post">
-                          <input type="hidden" name="action" value="move_material_folder">
-                          <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
-                          <input type="hidden" name="folder_id" value="<?php echo (int) $folder['id']; ?>">
-                          <input type="hidden" name="direction" value="down">
-                          <button type="submit" class="learner-icon-button topic-order-button" <?php echo $topicIndex === count($materialFolders) - 1 ? 'disabled' : ''; ?> aria-label="Move topic down">
-                            <i class="fa-solid fa-arrow-down"></i>
-                          </button>
-                        </form>
-                      </div>
+                      <?php if ($canManageTopicsEdit): ?>
+                        <div class="class-order-actions" aria-label="Reorder <?php echo e($folder['name']); ?> topic">
+                          <form method="post">
+                            <input type="hidden" name="action" value="move_material_folder">
+                            <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
+                            <input type="hidden" name="folder_id" value="<?php echo (int) $folder['id']; ?>">
+                            <input type="hidden" name="direction" value="up">
+                            <button type="submit" class="learner-icon-button topic-order-button" <?php echo $topicIndex === 0 ? 'disabled' : ''; ?> aria-label="Move topic up">
+                              <i class="fa-solid fa-arrow-up"></i>
+                            </button>
+                          </form>
+                          <form method="post">
+                            <input type="hidden" name="action" value="move_material_folder">
+                            <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
+                            <input type="hidden" name="folder_id" value="<?php echo (int) $folder['id']; ?>">
+                            <input type="hidden" name="direction" value="down">
+                            <button type="submit" class="learner-icon-button topic-order-button" <?php echo $topicIndex === count($materialFolders) - 1 ? 'disabled' : ''; ?> aria-label="Move topic down">
+                              <i class="fa-solid fa-arrow-down"></i>
+                            </button>
+                          </form>
+                        </div>
+                      <?php endif; ?>
                       <a class="btn btn-sm btn-primary" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=materials&topic_id=<?php echo (int) $folder['id']; ?>">
                         <i class="fa-solid fa-folder-open me-2"></i>Open Topic
                       </a>
-                      <button type="button" class="learner-icon-button edit-topic-button" data-bs-toggle="modal" data-bs-target="#editTopicModal" data-topic-id="<?php echo (int) $folder['id']; ?>" data-name="<?php echo e($folder['name']); ?>" data-description="<?php echo e((string) ($folder['description'] ?? '')); ?>" data-banner-image="<?php echo e((string) ($folder['banner_image'] ?? '')); ?>" data-return-tool="tasks" aria-label="Edit topic">
-                        <i class="fa-solid fa-pen"></i>
-                      </button>
-                      <form method="post" onsubmit="return confirm('Delete this topic? Linked records will be unassigned only.');">
-                        <input type="hidden" name="action" value="delete_material_folder">
-                        <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
-                        <input type="hidden" name="tool" value="tasks">
-                        <input type="hidden" name="return_tool" value="tasks">
-                        <input type="hidden" name="folder_id" value="<?php echo (int) $folder['id']; ?>">
-                        <button type="submit" class="learner-icon-button is-danger" aria-label="Delete topic">
-                          <i class="fa-solid fa-trash"></i>
+                      <?php if ($canManageTopicsEdit): ?>
+                        <button type="button" class="learner-icon-button edit-topic-button" data-bs-toggle="modal" data-bs-target="#editTopicModal" data-topic-id="<?php echo (int) $folder['id']; ?>" data-name="<?php echo e($folder['name']); ?>" data-description="<?php echo e((string) ($folder['description'] ?? '')); ?>" data-banner-image="<?php echo e((string) ($folder['banner_image'] ?? '')); ?>" data-return-tool="tasks" aria-label="Edit topic">
+                          <i class="fa-solid fa-pen"></i>
                         </button>
-                      </form>
+                      <?php endif; ?>
+                      <?php if ($canManageTopicsDelete): ?>
+                        <form method="post" onsubmit="return confirm('Delete this topic? Linked records will be unassigned only.');">
+                          <input type="hidden" name="action" value="delete_material_folder">
+                          <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
+                          <input type="hidden" name="tool" value="tasks">
+                          <input type="hidden" name="return_tool" value="tasks">
+                          <input type="hidden" name="folder_id" value="<?php echo (int) $folder['id']; ?>">
+                          <button type="submit" class="learner-icon-button is-danger" aria-label="Delete topic">
+                            <i class="fa-solid fa-trash"></i>
+                          </button>
+                        </form>
+                      <?php endif; ?>
                     </footer>
                   </article>
                 <?php endforeach; ?>
@@ -3343,9 +3488,11 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
               </div>
               <div class="d-flex flex-wrap gap-2">
                 <?php if ($materialFolders): ?>
-                  <button type="button" class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#taskModal">
-                    <i class="fa-solid fa-plus me-2"></i>Add Grade Item
-                  </button>
+                  <?php if ($canManageGradesAdd): ?>
+                    <button type="button" class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#taskModal">
+                      <i class="fa-solid fa-plus me-2"></i>Add Grade Item
+                    </button>
+                  <?php endif; ?>
                 <?php endif; ?>
                 <a href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=tasks" class="btn btn-sm btn-outline-primary">Manage Topics</a>
               </div>
@@ -3386,7 +3533,7 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
                   </div>
                   <div class="col-md-1">
                     <label class="form-label d-none d-md-block">&nbsp;</label>
-                    <button type="button" class="learner-icon-button w-100 edit-task-button" data-bs-toggle="modal" data-bs-target="#editTaskModal" <?php echo !$selectedTask ? 'disabled' : ''; ?> aria-label="Edit selected grade item">
+                    <button type="button" class="learner-icon-button w-100 edit-task-button" data-bs-toggle="modal" data-bs-target="#editTaskModal" <?php echo (!$selectedTask || !$canManageGradesEdit) ? 'disabled' : ''; ?> aria-label="Edit selected grade item">
                       <i class="fa-solid fa-pen"></i>
                     </button>
                   </div>
@@ -3445,14 +3592,14 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
                             <span class="text-secondary small"><?php echo e($learner['learner_number']); ?></span>
                           </td>
                           <td style="max-width: 160px;">
-                            <input type="number" class="form-control grade-score-input" name="scores[<?php echo (int) $learner['id']; ?>]" min="1" max="<?php echo e((string) $selectedTaskMaxScore); ?>" step="0.01" value="<?php echo $grade ? e((string) $grade['score']) : ''; ?>" placeholder="1-<?php echo e(number_format($selectedTaskMaxScore, 0)); ?>" data-passing-score="<?php echo $selectedTaskPassingScore !== null ? e((string) $selectedTaskPassingScore) : ''; ?>">
+                            <input type="number" class="form-control grade-score-input" name="scores[<?php echo (int) $learner['id']; ?>]" min="1" max="<?php echo e((string) $selectedTaskMaxScore); ?>" step="0.01" value="<?php echo $grade ? e((string) $grade['score']) : ''; ?>" placeholder="1-<?php echo e(number_format($selectedTaskMaxScore, 0)); ?>" data-passing-score="<?php echo $selectedTaskPassingScore !== null ? e((string) $selectedTaskPassingScore) : ''; ?>" <?php echo !$canManageGradesEdit ? 'disabled' : ''; ?>>
                             <input type="hidden" class="grade-result-input" name="remarks[<?php echo (int) $learner['id']; ?>]" value="<?php echo e($gradeStatus); ?>">
                           </td>
                           <td>
                             <span class="badge <?php echo e($statusClass); ?> grade-status-badge"><?php echo $gradeStatus !== '' ? e($gradeStatus) : 'No result'; ?></span>
                           </td>
                           <td>
-                            <input type="text" class="form-control grade-other-remarks-input" name="other_remarks[<?php echo (int) $learner['id']; ?>]" value="<?php echo $grade ? e((string) ($grade['other_remarks'] ?? '')) : ''; ?>" placeholder="Optional" data-grade-id="<?php echo $grade ? (int) $grade['id'] : 0; ?>" data-task-id="<?php echo $selectedTask ? (int) $selectedTask['id'] : 0; ?>" data-learner-id="<?php echo (int) $learner['id']; ?>">
+                            <input type="text" class="form-control grade-other-remarks-input" name="other_remarks[<?php echo (int) $learner['id']; ?>]" value="<?php echo $grade ? e((string) ($grade['other_remarks'] ?? '')) : ''; ?>" placeholder="Optional" data-grade-id="<?php echo $grade ? (int) $grade['id'] : 0; ?>" data-task-id="<?php echo $selectedTask ? (int) $selectedTask['id'] : 0; ?>" data-learner-id="<?php echo (int) $learner['id']; ?>" <?php echo !$canManageGradesEdit ? 'disabled' : ''; ?>>
                             <div class="form-text grade-autosave-status" aria-live="polite"></div>
                           </td>
                         </tr>
@@ -3460,7 +3607,7 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
                     </tbody>
                   </table>
                 </div>
-                <button type="submit" class="btn btn-primary" <?php echo (!$learners || !$selectedTask) ? 'disabled' : ''; ?>>
+                <button type="submit" class="btn btn-primary" <?php echo (!$learners || !$selectedTask || !$canManageGradesEdit) ? 'disabled' : ''; ?>>
                   <i class="fa-solid fa-floppy-disk me-2"></i>Save Grades
                 </button>
               </form>
@@ -4328,6 +4475,6 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
       }
     })();
   </script>
-  <script src="js/app.js?v=20260629-grade-score-autosave"></script>
+  <script src="js/app.js?v=20260629-class-role-permissions"></script>
 </body>
 </html>

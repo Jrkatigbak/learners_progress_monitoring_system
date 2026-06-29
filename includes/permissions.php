@@ -18,6 +18,30 @@ function kiwiPermissionDefinitions(): array
         'users.delete' => ['label' => 'User Management', 'group' => 'Users', 'action' => 'delete'],
         'settings.view' => ['label' => 'System Settings', 'group' => 'Settings', 'action' => 'view'],
         'settings.edit' => ['label' => 'System Settings', 'group' => 'Settings', 'action' => 'edit'],
+        'class_learners.view' => ['label' => 'Class Learners', 'group' => 'Class Workspace', 'action' => 'view'],
+        'class_learners.add' => ['label' => 'Class Learners', 'group' => 'Class Workspace', 'action' => 'add'],
+        'class_learners.edit' => ['label' => 'Class Learners', 'group' => 'Class Workspace', 'action' => 'edit'],
+        'class_learners.delete' => ['label' => 'Class Learners', 'group' => 'Class Workspace', 'action' => 'delete'],
+        'class_teachers.view' => ['label' => 'Class Teachers', 'group' => 'Class Workspace', 'action' => 'view'],
+        'class_teachers.add' => ['label' => 'Class Teachers', 'group' => 'Class Workspace', 'action' => 'add'],
+        'class_teachers.edit' => ['label' => 'Class Teachers', 'group' => 'Class Workspace', 'action' => 'edit'],
+        'class_teachers.delete' => ['label' => 'Class Teachers', 'group' => 'Class Workspace', 'action' => 'delete'],
+        'class_materials.view' => ['label' => 'Class Materials', 'group' => 'Class Workspace', 'action' => 'view'],
+        'class_materials.add' => ['label' => 'Class Materials', 'group' => 'Class Workspace', 'action' => 'add'],
+        'class_materials.edit' => ['label' => 'Class Materials', 'group' => 'Class Workspace', 'action' => 'edit'],
+        'class_materials.delete' => ['label' => 'Class Materials', 'group' => 'Class Workspace', 'action' => 'delete'],
+        'class_quizzes.view' => ['label' => 'Class Quizzes', 'group' => 'Class Workspace', 'action' => 'view'],
+        'class_quizzes.add' => ['label' => 'Class Quizzes', 'group' => 'Class Workspace', 'action' => 'add'],
+        'class_quizzes.edit' => ['label' => 'Class Quizzes', 'group' => 'Class Workspace', 'action' => 'edit'],
+        'class_quizzes.delete' => ['label' => 'Class Quizzes', 'group' => 'Class Workspace', 'action' => 'delete'],
+        'class_assignments.view' => ['label' => 'Class Assignments', 'group' => 'Class Workspace', 'action' => 'view'],
+        'class_assignments.add' => ['label' => 'Class Assignments', 'group' => 'Class Workspace', 'action' => 'add'],
+        'class_assignments.edit' => ['label' => 'Class Assignments', 'group' => 'Class Workspace', 'action' => 'edit'],
+        'class_assignments.delete' => ['label' => 'Class Assignments', 'group' => 'Class Workspace', 'action' => 'delete'],
+        'class_grades.view' => ['label' => 'Class Grades', 'group' => 'Class Workspace', 'action' => 'view'],
+        'class_grades.add' => ['label' => 'Class Grades', 'group' => 'Class Workspace', 'action' => 'add'],
+        'class_grades.edit' => ['label' => 'Class Grades', 'group' => 'Class Workspace', 'action' => 'edit'],
+        'class_grades.delete' => ['label' => 'Class Grades', 'group' => 'Class Workspace', 'action' => 'delete'],
     ];
 }
 
@@ -26,7 +50,7 @@ function kiwiAdminSideRoles(PDO $pdo): array
     $statement = $pdo->query(
         'SELECT role_key
          FROM roles
-         WHERE role_key NOT IN ("teacher", "learner")
+         WHERE role_key <> "learner"
            AND deleted_at IS NULL'
     );
 
@@ -85,6 +109,12 @@ function kiwiCan(PDO $pdo, string $permission, ?array $user = null): bool
         'grades.manage' => ['grades.view', 'grades.add', 'grades.edit', 'grades.delete'],
         'users.manage' => ['users.view', 'users.add', 'users.edit', 'users.delete'],
         'settings.manage' => ['settings.view', 'settings.edit'],
+        'class_learners.manage' => ['class_learners.view', 'class_learners.add', 'class_learners.edit', 'class_learners.delete'],
+        'class_teachers.manage' => ['class_teachers.view', 'class_teachers.add', 'class_teachers.edit', 'class_teachers.delete'],
+        'class_materials.manage' => ['class_materials.view', 'class_materials.add', 'class_materials.edit', 'class_materials.delete'],
+        'class_quizzes.manage' => ['class_quizzes.view', 'class_quizzes.add', 'class_quizzes.edit', 'class_quizzes.delete'],
+        'class_assignments.manage' => ['class_assignments.view', 'class_assignments.add', 'class_assignments.edit', 'class_assignments.delete'],
+        'class_grades.manage' => ['class_grades.view', 'class_grades.add', 'class_grades.edit', 'class_grades.delete'],
     ];
 
     foreach ($aliases[$permission] ?? [] as $aliasPermission) {

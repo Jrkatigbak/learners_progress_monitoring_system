@@ -280,7 +280,7 @@ $successMessages = [
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=20260629-grade-score-autosave" rel="stylesheet">
+  <link href="css/style.css?v=20260629-class-role-permissions" rel="stylesheet">
 </head>
 <body class="dashboard-page">
   <div class="app-layout">
@@ -467,6 +467,6 @@ $successMessages = [
       renderTimer();
     })();
   </script>
-  <script src="js/app.js?v=20260629-grade-score-autosave"></script>
+  <script src="js/app.js?v=20260629-class-role-permissions"></script>
 </body>
 </html>
