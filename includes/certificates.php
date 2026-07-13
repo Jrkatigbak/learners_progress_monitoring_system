@@ -1,0 +1,147 @@
+<?php
+
+function kiwiClassCertificateColumns(PDO $pdo): array
+{
+    $columns = [];
+
+    foreach ($pdo->query('DESCRIBE classes') as $row) {
+        $columns[(string) $row['Field']] = true;
+    }
+
+    return [
+        'certificate_template_image' => isset($columns['certificate_template_image']),
+        'certificate_name_x' => isset($columns['certificate_name_x']),
+        'certificate_name_y' => isset($columns['certificate_name_y']),
+        'certificate_font_size' => isset($columns['certificate_font_size']),
+        'certificate_font_color' => isset($columns['certificate_font_color']),
+    ];
+}
+
+function kiwiClassCertificateReady(array $columns): bool
+{
+    foreach (['certificate_template_image', 'certificate_name_x', 'certificate_name_y', 'certificate_font_size', 'certificate_font_color'] as $field) {
+        if (empty($columns[$field])) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+function kiwiCertificateFontPath(): string
+{
+    $candidates = [
+        __DIR__ . '/../assets/fonts/DejaVuSans-Bold.ttf',
+        '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+        '/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf',
+        '/System/Library/Fonts/Supplemental/Arial Bold.ttf',
+        '/Library/Fonts/Arial Bold.ttf',
+    ];
+
+    foreach ($candidates as $candidate) {
+        if (is_file($candidate)) {
+            return $candidate;
+        }
+    }
+
+    return '';
+}
+
+function kiwiCertificateHexColor(string $hex): array
+{
+    $hex = ltrim(trim($hex), '#');
+
+    if (!preg_match('/^[0-9a-fA-F]{6}$/', $hex)) {
+        $hex = '1f1a17';
+    }
+
+    return [
+        hexdec(substr($hex, 0, 2)),
+        hexdec(substr($hex, 2, 2)),
+        hexdec(substr($hex, 4, 2)),
+    ];
+}
+
+function kiwiCertificateImageFromPath(string $path)
+{
+    $extension = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+
+    if (in_array($extension, ['jpg', 'jpeg'], true)) {
+        return imagecreatefromjpeg($path);
+    }
+
+    if ($extension === 'png') {
+        return imagecreatefrompng($path);
+    }
+
+    if ($extension === 'webp' && function_exists('imagecreatefromwebp')) {
+        return imagecreatefromwebp($path);
+    }
+
+    return false;
+}
+
+function kiwiRenderCertificateImage(string $templatePath, string $learnerName, float $nameX, float $nameY, int $fontSize, string $fontColor)
+{
+    if (!extension_loaded('gd') || !is_file($templatePath)) {
+        return false;
+    }
+
+    $image = kiwiCertificateImageFromPath($templatePath);
+
+    if (!$image) {
+        return false;
+    }
+
+    imagealphablending($image, true);
+    imagesavealpha($image, true);
+
+    $width = imagesx($image);
+    $height = imagesy($image);
+    [$red, $green, $blue] = kiwiCertificateHexColor($fontColor);
+    $color = imagecolorallocate($image, $red, $green, $blue);
+    $font = kiwiCertificateFontPath();
+    $fontSize = max(12, min(220, $fontSize));
+    $targetWidth = $width * 0.78;
+    $centerX = ($width * max(0, min(100, $nameX))) / 100;
+    $baselineY = ($height * max(0, min(100, $nameY))) / 100;
+
+    if ($font !== '') {
+        while ($fontSize > 12) {
+            $box = imagettfbbox($fontSize, 0, $font, $learnerName);
+            $textWidth = abs($box[2] - $box[0]);
+
+            if ($textWidth <= $targetWidth) {
+                break;
+            }
+
+            $fontSize -= 2;
+        }
+
+        $box = imagettfbbox($fontSize, 0, $font, $learnerName);
+        $textWidth = abs($box[2] - $box[0]);
+        $textHeight = abs($box[7] - $box[1]);
+        $x = (int) round($centerX - ($textWidth / 2));
+        $y = (int) round($baselineY + ($textHeight / 2));
+        imagettftext($image, $fontSize, 0, $x, $y, $color, $font, $learnerName);
+
+        return $image;
+    }
+
+    $fallbackFont = 5;
+    $textWidth = imagefontwidth($fallbackFont) * strlen($learnerName);
+    $textHeight = imagefontheight($fallbackFont);
+    imagestring($image, $fallbackFont, (int) round($centerX - ($textWidth / 2)), (int) round($baselineY - ($textHeight / 2)), $learnerName, $color);
+
+    return $image;
+}
+
+function kiwiOutputCertificatePng($image): string
+{
+    ob_start();
+    imagepng($image);
+    $contents = (string) ob_get_clean();
+    imagedestroy($image);
+
+    return $contents;
+}

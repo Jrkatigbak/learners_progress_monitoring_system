@@ -42,6 +42,10 @@ function kiwiPermissionDefinitions(): array
         'class_grades.add' => ['label' => 'Class Grades', 'group' => 'Class Workspace', 'action' => 'add'],
         'class_grades.edit' => ['label' => 'Class Grades', 'group' => 'Class Workspace', 'action' => 'edit'],
         'class_grades.delete' => ['label' => 'Class Grades', 'group' => 'Class Workspace', 'action' => 'delete'],
+        'class_certificates.view' => ['label' => 'Class Certificates', 'group' => 'Class Workspace', 'action' => 'view'],
+        'class_certificates.add' => ['label' => 'Class Certificates', 'group' => 'Class Workspace', 'action' => 'add'],
+        'class_certificates.edit' => ['label' => 'Class Certificates', 'group' => 'Class Workspace', 'action' => 'edit'],
+        'class_certificates.delete' => ['label' => 'Class Certificates', 'group' => 'Class Workspace', 'action' => 'delete'],
     ];
 }
 
@@ -115,6 +119,7 @@ function kiwiCan(PDO $pdo, string $permission, ?array $user = null): bool
         'class_quizzes.manage' => ['class_quizzes.view', 'class_quizzes.add', 'class_quizzes.edit', 'class_quizzes.delete'],
         'class_assignments.manage' => ['class_assignments.view', 'class_assignments.add', 'class_assignments.edit', 'class_assignments.delete'],
         'class_grades.manage' => ['class_grades.view', 'class_grades.add', 'class_grades.edit', 'class_grades.delete'],
+        'class_certificates.manage' => ['class_certificates.view', 'class_certificates.add', 'class_certificates.edit', 'class_certificates.delete'],
     ];
 
     foreach ($aliases[$permission] ?? [] as $aliasPermission) {

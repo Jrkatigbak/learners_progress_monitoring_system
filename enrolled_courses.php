@@ -94,7 +94,7 @@ $learnerInitials = strtoupper(substr($learnerName, 0, 1));
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=20260713-learner-sidebar-teacher-email" rel="stylesheet">
+  <link href="css/style.css?v=20260713-learner-course-view" rel="stylesheet">
 </head>
 <body class="dashboard-page">
   <div class="app-layout">
@@ -147,9 +147,8 @@ $learnerInitials = strtoupper(substr($learnerName, 0, 1));
           <div>
             <span class="section-kicker">Learner Portal</span>
             <h2><?php echo e($learnerName); ?></h2>
-            <p>View your approved classes and classmates.</p>
+            <p>Open your approved classes and view the available course modules.</p>
           </div>
-          <a href="available_courses.php" class="btn btn-outline-light"><i class="fa-solid fa-plus me-2"></i>Find Class</a>
         </div>
 
         <?php if (!$learner): ?>
@@ -169,7 +168,7 @@ $learnerInitials = strtoupper(substr($learnerName, 0, 1));
                 $courseId = (int) $course['id'];
                 $classmates = $classmatesByCourse[$courseId] ?? [];
               ?>
-              <article class="course-card">
+              <a class="course-card course-card-link" href="learner_course.php?course_id=<?php echo $courseId; ?>" aria-label="Open <?php echo e($course['course_name']); ?>">
                 <div class="course-wallpaper">
                   <?php if (!empty($course['banner_image'])): ?>
                     <img src="<?php echo e($course['banner_image']); ?>" alt="<?php echo e($course['course_name']); ?> wallpaper">
@@ -192,40 +191,9 @@ $learnerInitials = strtoupper(substr($learnerName, 0, 1));
                     <span><i class="fa-regular fa-calendar"></i><?php echo e(date('M d, Y', strtotime($course['enrolled_at']))); ?></span>
                     <span><i class="fa-solid fa-users"></i><?php echo count($classmates); ?> classmates</span>
                   </div>
-                  <a class="btn btn-sm btn-outline-primary mb-3" href="learner_quizzes.php">
-                    <i class="fa-solid fa-circle-question me-2"></i>Open Quizzes
-                  </a>
-                  <a class="btn btn-sm btn-outline-primary mb-3" href="learner_assignments.php">
-                    <i class="fa-solid fa-file-pen me-2"></i>Open Assignments
-                  </a>
-                  <div class="classmate-list">
-                    <h3>Classmates</h3>
-                    <?php if (!$classmates): ?>
-                      <p class="small mb-0">No classmates approved yet.</p>
-                    <?php else: ?>
-                      <div class="classmate-grid">
-                        <?php foreach ($classmates as $classmate): ?>
-                          <?php
-                            $classmateName = trim($classmate['first_name'] . ' ' . $classmate['last_name']);
-                            $classmateInitials = strtoupper(substr($classmate['first_name'], 0, 1) . substr($classmate['last_name'], 0, 1));
-                          ?>
-                          <div class="classmate-chip">
-                            <?php if (!empty($classmate['profile_photo'])): ?>
-                              <img src="<?php echo e($classmate['profile_photo']); ?>" alt="<?php echo e($classmateName); ?>">
-                            <?php else: ?>
-                              <span><?php echo e($classmateInitials); ?></span>
-                            <?php endif; ?>
-                            <div>
-                              <strong><?php echo e($classmateName); ?></strong>
-                              <small><?php echo e($classmate['learner_number']); ?></small>
-                            </div>
-                          </div>
-                        <?php endforeach; ?>
-                      </div>
-                    <?php endif; ?>
-                  </div>
+                  <span class="course-open-cue"><i class="fa-solid fa-arrow-right"></i>Open Course</span>
                 </div>
-              </article>
+              </a>
             <?php endforeach; ?>
           </div>
         <?php endif; ?>
@@ -235,6 +203,6 @@ $learnerInitials = strtoupper(substr($learnerName, 0, 1));
 
   <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-  <script src="js/app.js?v=20260713-learner-sidebar-teacher-email"></script>
+  <script src="js/app.js?v=20260713-learner-course-view"></script>
 </body>
 </html>

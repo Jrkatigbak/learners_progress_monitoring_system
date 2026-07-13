@@ -41,6 +41,18 @@ function deleteTeacherPhoto(string $photoPath): void
     }
 }
 
+function nextTeacherCode(PDO $pdo): string
+{
+    $statement = $pdo->query(
+        "SELECT MAX(CAST(teacher_code AS UNSIGNED))
+         FROM teachers
+         WHERE teacher_code REGEXP '^[0-9]+$'"
+    );
+    $latestCode = (int) ($statement->fetchColumn() ?: 1000);
+
+    return (string) ($latestCode + 1);
+}
+
 if (isset($_GET['edit'])) {
     $editStatement = $pdo->prepare('SELECT * FROM teachers WHERE id = :id AND deleted_at IS NULL LIMIT 1');
     $editStatement->execute(['id' => (int) $_GET['edit']]);
@@ -218,6 +230,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $status = $_POST['status'] ?? 'Active';
     $existingPhoto = trim($_POST['existing_photo'] ?? '');
     $profilePhoto = $existingPhoto;
+
+    if ($teacherCode === '' && $id === 0) {
+        $teacherCode = nextTeacherCode($pdo);
+    }
 
     if ($teacherCode === '') {
         $errors[] = 'Teacher code is required.';
@@ -417,9 +433,10 @@ if ($search !== '') {
 }
 
 $teacherRows = $teacherStatement->fetchAll();
+$generatedTeacherCode = nextTeacherCode($pdo);
 $formTeacher = $editingTeacher ?: [
     'id' => 0,
-    'teacher_code' => '',
+    'teacher_code' => $generatedTeacherCode,
     'full_name' => '',
     'email' => '',
     'phone' => '',
@@ -639,7 +656,10 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
             <div class="row g-3">
               <div class="col-md-4">
                 <label class="form-label" for="teacher_code">Teacher code</label>
-                <input type="text" class="form-control" id="teacher_code" name="teacher_code" value="<?php echo e($formTeacher['teacher_code']); ?>" required>
+                <input type="text" class="form-control" id="teacher_code" name="teacher_code" value="<?php echo e($formTeacher['teacher_code']); ?>" <?php echo ((int) $formTeacher['id'] === 0) ? 'readonly' : ''; ?> required>
+                <?php if ((int) $formTeacher['id'] === 0): ?>
+                  <div class="small text-secondary mt-2">Auto-generated for the next teacher.</div>
+                <?php endif; ?>
               </div>
               <div class="col-md-8">
                 <label class="form-label" for="full_name">Teacher name</label>

@@ -3,6 +3,7 @@
 require_once __DIR__ . '/includes/auth_guard.php';
 require_once __DIR__ . '/classes/SmtpMailer.php';
 require_once __DIR__ . '/includes/enrollment_helpers.php';
+require_once __DIR__ . '/includes/certificates.php';
 
 $mailerConfig = require __DIR__ . '/config/Mailer.php';
 
@@ -488,6 +489,7 @@ function classWorkspaceToolPermission(string $tool): string
         'quizzes' => 'class_quizzes.view',
         'assignments' => 'class_assignments.view',
         'grades' => 'class_grades.view',
+        'certificates' => 'class_certificates.view',
     ];
 
     return $toolPermissions[$tool] ?? '';
@@ -518,6 +520,7 @@ function classWorkspaceActionPermissions(string $action): array
         'save_grades' => ['any' => ['class_grades.edit']],
         'ajax_save_grade_other_remarks' => ['any' => ['class_grades.edit']],
         'ajax_save_grade_score' => ['any' => ['class_grades.edit']],
+        'save_certificate_template' => ['any' => ['class_certificates.add', 'class_certificates.edit']],
         'save_material_folder' => ['any' => ['class_materials.add', 'class_quizzes.add', 'class_assignments.add', 'class_grades.add']],
         'update_material_folder' => ['any' => ['class_materials.edit', 'class_quizzes.edit', 'class_assignments.edit', 'class_grades.edit']],
         'move_material_folder' => ['any' => ['class_materials.edit', 'class_quizzes.edit', 'class_assignments.edit', 'class_grades.edit']],
@@ -529,7 +532,7 @@ function classWorkspaceActionPermissions(string $action): array
 
 $classId = (int) ($_GET['class_id'] ?? $_POST['class_id'] ?? 0);
 $tool = $_GET['tool'] ?? $_POST['tool'] ?? 'dashboard';
-$allowedTools = ['dashboard', 'learners', 'teachers', 'materials', 'quizzes', 'assignments', 'tasks', 'grades'];
+$allowedTools = ['dashboard', 'learners', 'teachers', 'materials', 'quizzes', 'assignments', 'tasks', 'grades', 'certificates'];
 $tool = in_array($tool, $allowedTools, true) ? $tool : 'dashboard';
 $errors = [];
 $success = $_GET['success'] ?? '';
@@ -544,8 +547,11 @@ $assignmentUploadDirectory = __DIR__ . '/uploads/assignments';
 $assignmentUploadPathPrefix = 'uploads/assignments/';
 $topicUploadDirectory = __DIR__ . '/uploads/topics';
 $topicUploadPathPrefix = 'uploads/topics/';
+$certificateUploadDirectory = __DIR__ . '/uploads/certificates';
+$certificateUploadPathPrefix = 'uploads/certificates/';
 $taskGradeSettingColumns = classTaskGradeSettingColumns($pdo);
 $learnerGradeColumns = learnerGradeColumns($pdo);
+$classCertificateColumns = kiwiClassCertificateColumns($pdo);
 
 if (!$isAdmin && !$isTeacher) {
     header('Location: ' . $auth->redirectPath());
@@ -581,6 +587,15 @@ if (!is_dir($topicUploadDirectory)) {
 
 if (is_dir($topicUploadDirectory)) {
     @chmod($topicUploadDirectory, 0777);
+}
+
+if (!is_dir($certificateUploadDirectory)) {
+    // Certificate templates are class-level images used to generate learner certificates on demand.
+    mkdir($certificateUploadDirectory, 0777, true);
+}
+
+if (is_dir($certificateUploadDirectory)) {
+    @chmod($certificateUploadDirectory, 0777);
 }
 
 $classStatement = $pdo->prepare(
@@ -652,6 +667,7 @@ $classToolAccess = [
     'assignments' => classWorkspaceCan($pdo, $isSystemAdmin, 'class_assignments.view'),
     'tasks' => classWorkspaceCanAny($pdo, $isSystemAdmin, ['class_materials.view', 'class_quizzes.view', 'class_assignments.view', 'class_grades.view']),
     'grades' => classWorkspaceCan($pdo, $isSystemAdmin, 'class_grades.view'),
+    'certificates' => classWorkspaceCan($pdo, $isSystemAdmin, 'class_certificates.view'),
 ];
 
 if (empty($classToolAccess[$tool])) {
@@ -681,6 +697,8 @@ $canManageAssignmentsDelete = classWorkspaceCan($pdo, $isSystemAdmin, 'class_ass
 $canManageGradesAdd = classWorkspaceCan($pdo, $isSystemAdmin, 'class_grades.add');
 $canManageGradesEdit = classWorkspaceCan($pdo, $isSystemAdmin, 'class_grades.edit');
 $canManageGradesDelete = classWorkspaceCan($pdo, $isSystemAdmin, 'class_grades.delete');
+$canManageCertificatesAdd = classWorkspaceCan($pdo, $isSystemAdmin, 'class_certificates.add');
+$canManageCertificatesEdit = classWorkspaceCan($pdo, $isSystemAdmin, 'class_certificates.edit');
 $canManageTopicsAdd = classWorkspaceCanAny($pdo, $isSystemAdmin, ['class_materials.add', 'class_quizzes.add', 'class_assignments.add', 'class_grades.add']);
 $canManageTopicsEdit = classWorkspaceCanAny($pdo, $isSystemAdmin, ['class_materials.edit', 'class_quizzes.edit', 'class_assignments.edit', 'class_grades.edit']);
 $canManageTopicsDelete = classWorkspaceCanAny($pdo, $isSystemAdmin, ['class_materials.delete', 'class_quizzes.delete', 'class_assignments.delete', 'class_grades.delete']);
@@ -2366,6 +2384,97 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         $tool = 'grades';
     }
+
+    if ($action === 'save_certificate_template') {
+        $nameX = (float) ($_POST['certificate_name_x'] ?? 50);
+        $nameY = (float) ($_POST['certificate_name_y'] ?? 56);
+        $fontSize = (int) ($_POST['certificate_font_size'] ?? 56);
+        $fontColor = trim((string) ($_POST['certificate_font_color'] ?? '#1f1a17'));
+        $templateImage = (string) ($class['certificate_template_image'] ?? '');
+
+        if (!kiwiClassCertificateReady($classCertificateColumns)) {
+            $errors[] = 'Certificate database fields are not installed yet. Add the certificate columns to the classes table first.';
+        }
+
+        if (!extension_loaded('gd')) {
+            $errors[] = 'PHP GD extension is required to generate certificates.';
+        }
+
+        if ($nameX < 0 || $nameX > 100 || $nameY < 0 || $nameY > 100) {
+            $errors[] = 'Name position must be between 0 and 100 percent.';
+        }
+
+        if ($fontSize < 12 || $fontSize > 220) {
+            $errors[] = 'Font size must be between 12 and 220.';
+        }
+
+        if (!preg_match('/^#[0-9a-fA-F]{6}$/', $fontColor)) {
+            $errors[] = 'Choose a valid text color.';
+        }
+
+        if (isset($_FILES['certificate_template']) && $_FILES['certificate_template']['error'] !== UPLOAD_ERR_NO_FILE) {
+            if ($_FILES['certificate_template']['error'] !== UPLOAD_ERR_OK) {
+                $errors[] = 'Certificate template could not be uploaded.';
+            } elseif (!is_writable($certificateUploadDirectory)) {
+                $errors[] = 'Certificate upload folder is not writable.';
+            } else {
+                $allowedCertificateTypes = [
+                    'image/jpeg' => 'jpg',
+                    'image/png' => 'png',
+                    'image/webp' => 'webp',
+                ];
+                $mimeType = mime_content_type($_FILES['certificate_template']['tmp_name']);
+
+                if (!isset($allowedCertificateTypes[$mimeType])) {
+                    $errors[] = 'Certificate template must be JPG, PNG, or WEBP.';
+                } elseif ($_FILES['certificate_template']['size'] > 10 * 1024 * 1024) {
+                    $errors[] = 'Certificate template must be 10MB or smaller.';
+                } else {
+                    $filename = 'certificate-template-' . $classId . '-' . date('YmdHis') . '-' . bin2hex(random_bytes(4)) . '.' . $allowedCertificateTypes[$mimeType];
+                    $targetPath = $certificateUploadDirectory . '/' . $filename;
+
+                    if (move_uploaded_file($_FILES['certificate_template']['tmp_name'], $targetPath)) {
+                        if ($templateImage !== '' && strpos($templateImage, 'uploads/certificates/') === 0 && is_file(__DIR__ . '/' . $templateImage)) {
+                            unlink(__DIR__ . '/' . $templateImage);
+                        }
+
+                        $templateImage = $certificateUploadPathPrefix . $filename;
+                    } else {
+                        $errors[] = 'Certificate template could not be saved.';
+                    }
+                }
+            }
+        }
+
+        if ($templateImage === '') {
+            $errors[] = 'Upload a blank A4 certificate template first.';
+        }
+
+        if (!$errors) {
+            $updateCertificate = $pdo->prepare(
+                'UPDATE classes
+                 SET certificate_template_image = :certificate_template_image,
+                     certificate_name_x = :certificate_name_x,
+                     certificate_name_y = :certificate_name_y,
+                     certificate_font_size = :certificate_font_size,
+                     certificate_font_color = :certificate_font_color
+                 WHERE id = :id'
+            );
+            $updateCertificate->execute([
+                'certificate_template_image' => $templateImage,
+                'certificate_name_x' => $nameX,
+                'certificate_name_y' => $nameY,
+                'certificate_font_size' => $fontSize,
+                'certificate_font_color' => $fontColor,
+                'id' => $classId,
+            ]);
+
+            header('Location: class_workspace.php?class_id=' . $classId . '&tool=certificates&success=certificate_saved');
+            exit;
+        }
+
+        $tool = 'certificates';
+    }
 }
 
 $learnerStatement = $pdo->prepare(
@@ -2693,6 +2802,7 @@ $successMessages = [
     'task_updated' => 'Grade item updated successfully.',
     'task_deleted' => 'Grade deleted successfully.',
     'grades_saved' => 'Grades saved successfully.',
+    'certificate_saved' => 'Certificate template saved successfully.',
 ];
 $credentialEmailStatus = $_GET['credential_email'] ?? '';
 $notificationEmailStatus = $_GET['notification_email'] ?? '';
@@ -2712,7 +2822,7 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=20260713-learner-sidebar-teacher-email" rel="stylesheet">
+  <link href="css/style.css?v=20260713-certificates" rel="stylesheet">
   <?php echo kiwiSystemThemeStyle(); ?>
 </head>
 <body class="dashboard-page class-workspace-page class-workspace-<?php echo e($tool); ?>">
@@ -2749,6 +2859,9 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
         <?php endif; ?>
         <?php if (!empty($classToolAccess['grades'])): ?>
           <a class="<?php echo $tool === 'grades' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=grades"><i class="fa-solid fa-star"></i> Grades</a>
+        <?php endif; ?>
+        <?php if (!empty($classToolAccess['certificates'])): ?>
+          <a class="<?php echo $tool === 'certificates' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=certificates"><i class="fa-solid fa-award"></i> Certificates</a>
         <?php endif; ?>
         <a href="<?php echo $isTeacher ? 'teacher_dashboard.php' : 'classes.php'; ?>"><i class="fa-solid fa-arrow-left"></i> Back to Classes</a>
       </nav>
@@ -3687,6 +3800,103 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
             <?php endif; ?>
           </div>
         <?php endif; ?>
+
+        <?php if ($tool === 'certificates'): ?>
+          <div class="panel-card">
+            <div class="d-flex flex-wrap align-items-center justify-content-between gap-3 mb-4">
+              <div>
+                <span class="section-kicker">Certificates</span>
+                <h2 class="h5 mb-0">Generate learner certificates</h2>
+              </div>
+              <?php if (kiwiClassCertificateReady($classCertificateColumns) && !empty($class['certificate_template_image'])): ?>
+                <a class="btn btn-sm btn-primary" href="certificate.php?class_id=<?php echo $classId; ?>&all=1">
+                  <i class="fa-solid fa-file-zipper me-2"></i>Download All
+                </a>
+              <?php endif; ?>
+            </div>
+
+            <?php if (!kiwiClassCertificateReady($classCertificateColumns)): ?>
+              <div class="alert alert-warning mb-0" role="alert">
+                Certificate fields are not installed yet. Add the certificate columns to the <strong>classes</strong> table, then reload this page.
+              </div>
+            <?php else: ?>
+              <div class="row g-4">
+                <div class="col-lg-5">
+                  <form method="post" enctype="multipart/form-data" class="module-form certificate-template-form">
+                    <input type="hidden" name="action" value="save_certificate_template">
+                    <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
+                    <input type="hidden" name="tool" value="certificates">
+                    <div class="mb-3">
+                      <label class="form-label" for="certificate_template">A4 certificate template</label>
+                      <input type="file" class="form-control" id="certificate_template" name="certificate_template" accept="image/png,image/jpeg,image/webp" <?php echo empty($class['certificate_template_image']) ? 'required' : ''; ?>>
+                      <div class="form-text">Upload a blank A4 JPG, PNG, or WEBP template with the learner name area empty.</div>
+                    </div>
+                    <?php if (!empty($class['certificate_template_image'])): ?>
+                      <div class="certificate-template-preview mb-3">
+                        <img src="<?php echo e((string) $class['certificate_template_image']); ?>" alt="<?php echo e($class['class_name']); ?> certificate template">
+                      </div>
+                    <?php endif; ?>
+                    <div class="row g-3">
+                      <div class="col-6">
+                        <label class="form-label" for="certificate_name_x">Name X %</label>
+                        <input type="number" class="form-control" id="certificate_name_x" name="certificate_name_x" min="0" max="100" step="0.1" value="<?php echo e((string) ($class['certificate_name_x'] ?? '50')); ?>" required>
+                      </div>
+                      <div class="col-6">
+                        <label class="form-label" for="certificate_name_y">Name Y %</label>
+                        <input type="number" class="form-control" id="certificate_name_y" name="certificate_name_y" min="0" max="100" step="0.1" value="<?php echo e((string) ($class['certificate_name_y'] ?? '56')); ?>" required>
+                      </div>
+                      <div class="col-6">
+                        <label class="form-label" for="certificate_font_size">Font size</label>
+                        <input type="number" class="form-control" id="certificate_font_size" name="certificate_font_size" min="12" max="220" value="<?php echo e((string) ($class['certificate_font_size'] ?? '56')); ?>" required>
+                      </div>
+                      <div class="col-6">
+                        <label class="form-label" for="certificate_font_color">Text color</label>
+                        <input type="color" class="form-control form-control-color w-100" id="certificate_font_color" name="certificate_font_color" value="<?php echo e((string) ($class['certificate_font_color'] ?? '#1f1a17')); ?>">
+                      </div>
+                    </div>
+                    <div class="form-text mt-3">X/Y are percentage positions on the template. Start with X 50 and adjust Y until the name sits on the blank line.</div>
+                    <button type="submit" class="btn btn-primary mt-3" <?php echo !($canManageCertificatesAdd || $canManageCertificatesEdit) ? 'disabled' : ''; ?>>
+                      <i class="fa-solid fa-floppy-disk me-2"></i>Save Template
+                    </button>
+                  </form>
+                </div>
+                <div class="col-lg-7">
+                  <?php if (empty($class['certificate_template_image'])): ?>
+                    <div class="empty-state h-100">
+                      <i class="fa-solid fa-award"></i>
+                      <p>Upload a blank certificate template before generating learner certificates.</p>
+                    </div>
+                  <?php elseif (!$learners): ?>
+                    <div class="empty-state h-100">
+                      <i class="fa-solid fa-users"></i>
+                      <p>No enrolled learners are available for certificate generation.</p>
+                    </div>
+                  <?php else: ?>
+                    <div class="certificate-learner-list">
+                      <?php foreach ($learners as $learner): ?>
+                        <?php $certificateLearnerName = trim($learner['first_name'] . ' ' . ($learner['middle_name'] ?? '') . ' ' . $learner['last_name']); ?>
+                        <article class="certificate-learner-row">
+                          <div>
+                            <strong><?php echo e($certificateLearnerName); ?></strong>
+                            <span><?php echo e($learner['learner_number']); ?></span>
+                          </div>
+                          <div class="d-flex flex-wrap gap-2">
+                            <a class="btn btn-sm btn-outline-primary" href="certificate.php?class_id=<?php echo $classId; ?>&learner_id=<?php echo (int) $learner['id']; ?>" target="_blank" rel="noopener">
+                              <i class="fa-regular fa-eye me-1"></i>Preview
+                            </a>
+                            <a class="btn btn-sm btn-primary" href="certificate.php?class_id=<?php echo $classId; ?>&learner_id=<?php echo (int) $learner['id']; ?>&download=1" download>
+                              <i class="fa-solid fa-download me-1"></i>Download
+                            </a>
+                          </div>
+                        </article>
+                      <?php endforeach; ?>
+                    </div>
+                  <?php endif; ?>
+                </div>
+              </div>
+            <?php endif; ?>
+          </div>
+        <?php endif; ?>
       </section>
     </main>
   </div>
@@ -4547,6 +4757,6 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
       }
     })();
   </script>
-  <script src="js/app.js?v=20260713-learner-sidebar-teacher-email"></script>
+  <script src="js/app.js?v=20260713-certificates"></script>
 </body>
 </html>
