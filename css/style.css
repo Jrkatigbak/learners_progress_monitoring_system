@@ -3595,6 +3595,85 @@ body {
   white-space: nowrap;
 }
 
+.learner-course-classmate-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.learner-course-classmate-card {
+  position: relative;
+  min-width: 0;
+  min-height: 196px;
+  padding: 34px 18px 22px;
+  text-align: center;
+  border: 1px solid #e8eef3;
+  border-radius: 18px;
+  background: var(--surface);
+  box-shadow: 0 10px 24px rgba(31, 49, 69, 0.06);
+  transition: transform 0.22s ease, border-color 0.22s ease, box-shadow 0.22s ease;
+}
+
+.learner-course-classmate-card:hover {
+  transform: translateY(-6px);
+  border-color: rgba(74, 160, 255, 0.42);
+  box-shadow: 0 18px 38px rgba(31, 49, 69, 0.14);
+}
+
+.learner-course-classmate-card .learner-status-pill {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+}
+
+.learner-course-classmate-photo {
+  width: 104px;
+  height: 104px;
+  margin: 0 auto 16px;
+  overflow: hidden;
+  border: 5px solid #fff;
+  border-radius: 50%;
+  background: #eef4f8;
+  box-shadow: 0 8px 18px rgba(31, 49, 69, 0.14);
+}
+
+.learner-course-classmate-photo img,
+.learner-course-classmate-photo span {
+  width: 100%;
+  height: 100%;
+}
+
+.learner-course-classmate-photo img {
+  display: block;
+  object-fit: cover;
+}
+
+.learner-course-classmate-photo span {
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-size: 1.25rem;
+  font-weight: 800;
+  background: linear-gradient(135deg, #39a66b, #4aa0ff);
+}
+
+.learner-course-classmate-card h3 {
+  margin: 0 0 4px;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 0.96rem;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.learner-course-classmate-card p {
+  margin: 0;
+  color: #6f879f;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
 .modal-content {
   background: var(--surface);
   color: var(--ink);
@@ -3758,6 +3837,7 @@ body {
   .course-grid,
   .learner-course-module-grid,
   .learner-course-topic-grid,
+  .learner-course-classmate-grid,
   .class-learner-picker-grid,
   .classmate-grid {
     grid-template-columns: 1fr;

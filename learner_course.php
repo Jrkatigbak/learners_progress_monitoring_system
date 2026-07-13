@@ -103,6 +103,7 @@ if ($classId > 0) {
                 learners.first_name,
                 learners.last_name,
                 learners.email,
+                learners.status,
                 learners.profile_photo
          FROM course_enrollments
          INNER JOIN learners ON learners.id = course_enrollments.learner_id AND learners.deleted_at IS NULL
@@ -234,7 +235,7 @@ $moduleCards = [
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=20260713-learner-dashboard-nav" rel="stylesheet">
+  <link href="css/style.css?v=20260713-learner-classmates" rel="stylesheet">
 </head>
 <body class="dashboard-page">
   <div class="app-layout">
@@ -507,23 +508,25 @@ $moduleCards = [
           <?php if (!$classmates): ?>
             <div class="empty-state compact"><i class="fa-solid fa-users"></i><p>No classmates approved yet.</p></div>
           <?php else: ?>
-            <div class="classmate-grid">
+            <div class="learner-course-classmate-grid">
               <?php foreach ($classmates as $classmate): ?>
                 <?php
                   $classmateName = trim($classmate['first_name'] . ' ' . $classmate['last_name']);
                   $classmateInitials = strtoupper(substr($classmate['first_name'], 0, 1) . substr($classmate['last_name'], 0, 1));
+                  $classmateStatus = (string) ($classmate['status'] ?? 'Active');
                 ?>
-                <div class="classmate-chip">
-                  <?php if (!empty($classmate['profile_photo'])): ?>
-                    <img src="<?php echo e($classmate['profile_photo']); ?>" alt="<?php echo e($classmateName); ?>">
-                  <?php else: ?>
-                    <span><?php echo e($classmateInitials); ?></span>
-                  <?php endif; ?>
-                  <div>
-                    <strong><?php echo e($classmateName); ?></strong>
-                    <small><?php echo e($classmate['learner_number']); ?></small>
+                <article class="learner-course-classmate-card">
+                  <span class="learner-status-pill is-active"><?php echo e($classmateStatus); ?></span>
+                  <div class="learner-course-classmate-photo">
+                    <?php if (!empty($classmate['profile_photo'])): ?>
+                      <img src="<?php echo e($classmate['profile_photo']); ?>" alt="<?php echo e($classmateName); ?>">
+                    <?php else: ?>
+                      <span><?php echo e($classmateInitials); ?></span>
+                    <?php endif; ?>
                   </div>
-                </div>
+                  <h3><?php echo e($classmateName); ?></h3>
+                  <p><?php echo e($classmate['learner_number']); ?></p>
+                </article>
               <?php endforeach; ?>
             </div>
           <?php endif; ?>
@@ -560,6 +563,6 @@ $moduleCards = [
 
   <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-  <script src="js/app.js?v=20260713-learner-dashboard-nav"></script>
+  <script src="js/app.js?v=20260713-learner-classmates"></script>
 </body>
 </html>
