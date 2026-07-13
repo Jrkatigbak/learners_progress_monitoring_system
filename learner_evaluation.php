@@ -2,6 +2,7 @@
 
 require_once __DIR__ . '/includes/auth_guard.php';
 require_once __DIR__ . '/includes/evaluations.php';
+require_once __DIR__ . '/includes/learner_course_sidebar.php';
 
 if ($auth->isAdmin()) {
     header('Location: dashboard.php');
@@ -64,6 +65,7 @@ if (!$learner || !$course) {
 $classId = (int) $course['id'];
 $learnerName = trim($learner['first_name'] . ' ' . $learner['last_name']);
 $learnerInitials = strtoupper(substr($learnerName, 0, 1));
+$learnerCourseContext = kiwiLearnerCourseContext($pdo, (int) $learner['id'], $courseId);
 $evaluationColumnsReady = kiwiClassEvaluationColumnsReady(kiwiClassEvaluationColumns($pdo));
 $evaluationTableReady = kiwiClassEvaluationsTableReady($pdo);
 $ratingSections = kiwiEvaluationRatingItems();
@@ -199,7 +201,7 @@ function postedOrExisting(string $field, ?array $existingEvaluation, string $fal
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=20260713-evaluation-submit" rel="stylesheet">
+  <link href="css/style.css?v=20260713-course-sidebar" rel="stylesheet">
 </head>
 <body class="dashboard-page">
   <div class="app-layout">
@@ -211,14 +213,7 @@ function postedOrExisting(string $field, ?array $existingEvaluation, string $fal
           <small>Learners Progress Monitoring System</small>
         </span>
       </a>
-      <nav class="sidebar-nav">
-        <a href="learner_dashboard.php"><i class="fa-solid fa-gauge-high"></i> Dashboard</a>
-        <a class="active" href="enrolled_courses.php"><i class="fa-solid fa-book-open-reader"></i> Enrolled Class</a>
-      </nav>
-      <div class="sidebar-footer">
-        <p class="mb-1">Logged in as</p>
-        <strong><?php echo e($learnerName); ?></strong>
-      </div>
+      <?php kiwiRenderLearnerCourseSidebar($learnerCourseContext, $learnerName, 'evaluation', (int) $learner['id']); ?>
     </aside>
 
     <main class="main-panel">
@@ -378,6 +373,6 @@ function postedOrExisting(string $field, ?array $existingEvaluation, string $fal
   <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
-  <script src="js/app.js?v=20260713-evaluation-submit"></script>
+  <script src="js/app.js?v=20260713-course-sidebar"></script>
 </body>
 </html>

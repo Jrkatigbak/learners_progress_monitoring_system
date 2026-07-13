@@ -1,6 +1,7 @@
 <?php
 
 require_once __DIR__ . '/includes/auth_guard.php';
+require_once __DIR__ . '/includes/learner_course_sidebar.php';
 
 if ($auth->isAdmin()) {
     header('Location: dashboard.php');
@@ -18,6 +19,7 @@ function e(string $value): string
     return htmlspecialchars($value, ENT_QUOTES, 'UTF-8');
 }
 
+$courseId = max(0, (int) ($_GET['course_id'] ?? 0));
 $learnerStatement = $pdo->prepare(
     'SELECT id, learner_number, first_name, last_name, email, profile_photo
      FROM learners
@@ -30,6 +32,7 @@ $learner = $learnerStatement->fetch() ?: null;
 
 $learnerName = $learner ? trim($learner['first_name'] . ' ' . $learner['last_name']) : $currentUser['name'];
 $learnerInitials = strtoupper(substr($learnerName, 0, 1));
+$learnerCourseContext = $learner ? kiwiLearnerCourseContext($pdo, (int) $learner['id'], $courseId) : null;
 $gradeRows = [];
 $gradesByClass = [];
 $learnerGradeColumns = [];
@@ -42,6 +45,7 @@ $otherRemarksSelect = isset($learnerGradeColumns['other_remarks'])
     : 'NULL AS other_remarks';
 
 if ($learner) {
+    $classFilter = $learnerCourseContext ? ' AND classes.id = :selected_class_id' : '';
     $gradeStatement = $pdo->prepare(
         "SELECT learner_grades.id,
                 learner_grades.score,
@@ -83,6 +87,7 @@ if ($learner) {
              learners.class_id = classes.id
              OR course_enrollments.id IS NOT NULL
            )
+           {$classFilter}
          ORDER BY classes.class_name,
                   COALESCE(class_material_folders.sort_order, 999999),
                   class_material_folders.name,
@@ -90,7 +95,11 @@ if ($learner) {
                   learner_grades.graded_at DESC,
                   learner_grades.id DESC"
     );
-    $gradeStatement->execute(['learner_id' => (int) $learner['id']]);
+    $gradeParams = ['learner_id' => (int) $learner['id']];
+    if ($learnerCourseContext) {
+        $gradeParams['selected_class_id'] = (int) $learnerCourseContext['class_id'];
+    }
+    $gradeStatement->execute($gradeParams);
     $gradeRows = $gradeStatement->fetchAll();
 
     foreach ($gradeRows as $grade) {
@@ -141,7 +150,7 @@ if ($learner) {
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=20260713-learner-profile" rel="stylesheet">
+  <link href="css/style.css?v=20260713-course-sidebar" rel="stylesheet">
 </head>
 <body class="dashboard-page">
   <div class="app-layout">
@@ -153,14 +162,7 @@ if ($learner) {
           <small>Learners Progress Monitoring System</small>
         </span>
       </a>
-      <nav class="sidebar-nav">
-        <a href="learner_dashboard.php"><i class="fa-solid fa-gauge-high"></i> Dashboard</a>
-        <a href="enrolled_courses.php"><i class="fa-solid fa-book-open-reader"></i> Enrolled Class</a>
-      </nav>
-      <div class="sidebar-footer">
-        <p class="mb-1">Logged in as</p>
-        <strong><?php echo e($learnerName); ?></strong>
-      </div>
+      <?php kiwiRenderLearnerCourseSidebar($learnerCourseContext, $learnerName, 'grades', (int) ($learner['id'] ?? 0)); ?>
     </aside>
 
     <main class="main-panel">
@@ -309,6 +311,6 @@ if ($learner) {
 
   <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-  <script src="js/app.js?v=20260713-learner-profile"></script>
+  <script src="js/app.js?v=20260713-course-sidebar"></script>
 </body>
 </html>

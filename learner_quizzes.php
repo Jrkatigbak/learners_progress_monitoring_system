@@ -1,6 +1,7 @@
 <?php
 
 require_once __DIR__ . '/includes/auth_guard.php';
+require_once __DIR__ . '/includes/learner_course_sidebar.php';
 
 if ($auth->isAdmin()) {
     header('Location: dashboard.php');
@@ -53,6 +54,7 @@ function learnerCanOpenQuiz(PDO $pdo, int $learnerId, int $quizId): ?array
 
 $success = $_GET['success'] ?? '';
 $errors = [];
+$courseId = max(0, (int) ($_GET['course_id'] ?? $_POST['course_id'] ?? 0));
 $quizId = (int) ($_GET['quiz_id'] ?? $_POST['quiz_id'] ?? 0);
 
 $learnerStatement = $pdo->prepare(
@@ -221,13 +223,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'submi
 
         $pdo->commit();
 
-        header('Location: learner_quizzes.php?quiz_id=' . (int) $activeQuiz['id'] . '&success=submitted');
+        $courseQuery = $courseId > 0 ? '&course_id=' . $courseId : '';
+        header('Location: learner_quizzes.php?quiz_id=' . (int) $activeQuiz['id'] . $courseQuery . '&success=submitted');
         exit;
     }
 }
 
 $quizRows = [];
 if ($learner && !$activeQuiz) {
+    $courseFilter = $courseId > 0 ? ' AND courses.id = :course_id' : '';
     $quizListStatement = $pdo->prepare(
         "SELECT class_quizzes.*,
                 classes.class_name,
@@ -256,12 +260,23 @@ if ($learner && !$activeQuiz) {
              learners.class_id = classes.id
              OR course_enrollments.id IS NOT NULL
            )
+           {$courseFilter}
          GROUP BY class_quizzes.id, quiz_attempts.id
          ORDER BY class_quizzes.created_at DESC, class_quizzes.id DESC"
     );
-    $quizListStatement->execute(['learner_id' => (int) $learner['id']]);
+    $quizParams = ['learner_id' => (int) $learner['id']];
+    if ($courseId > 0) {
+        $quizParams['course_id'] = $courseId;
+    }
+    $quizListStatement->execute($quizParams);
     $quizRows = $quizListStatement->fetchAll();
 }
+
+$learnerCourseContext = $learner
+    ? kiwiLearnerCourseContext($pdo, (int) $learner['id'], $courseId, (int) ($activeQuiz['class_id'] ?? 0))
+    : null;
+$courseQuerySuffix = $learnerCourseContext ? '?course_id=' . (int) $learnerCourseContext['course_id'] : '';
+$courseLinkSuffix = $learnerCourseContext ? '&course_id=' . (int) $learnerCourseContext['course_id'] : '';
 
 $successMessages = [
     'submitted' => 'Quiz submitted and grade computed.',
@@ -280,7 +295,7 @@ $successMessages = [
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=20260713-learner-profile" rel="stylesheet">
+  <link href="css/style.css?v=20260713-course-sidebar" rel="stylesheet">
 </head>
 <body class="dashboard-page">
   <div class="app-layout">
@@ -292,14 +307,7 @@ $successMessages = [
           <small>Learners Progress Monitoring System</small>
         </span>
       </a>
-      <nav class="sidebar-nav">
-        <a href="learner_dashboard.php"><i class="fa-solid fa-gauge-high"></i> Dashboard</a>
-        <a href="enrolled_courses.php"><i class="fa-solid fa-book-open-reader"></i> Enrolled Class</a>
-      </nav>
-      <div class="sidebar-footer">
-        <p class="mb-1">Logged in as</p>
-        <strong><?php echo e($learnerName); ?></strong>
-      </div>
+      <?php kiwiRenderLearnerCourseSidebar($learnerCourseContext, $learnerName, 'quizzes', (int) ($learner['id'] ?? 0)); ?>
     </aside>
 
     <main class="main-panel">
@@ -360,7 +368,7 @@ $successMessages = [
                 <span class="section-kicker"><?php echo e($activeQuiz['class_name']); ?></span>
                 <h2 class="h5 mb-0"><?php echo e($activeQuiz['title']); ?></h2>
               </div>
-              <a href="learner_quizzes.php" class="btn btn-sm btn-outline-secondary">Back to Quizzes</a>
+              <a href="learner_quizzes.php<?php echo e($courseQuerySuffix); ?>" class="btn btn-sm btn-outline-secondary">Back to Quizzes</a>
             </div>
 
             <?php if ($existingAttempt): ?>
@@ -428,7 +436,7 @@ $successMessages = [
                       <span><strong><?php echo e(number_format((float) $quiz['score'], 1)); ?>%</strong> score</span>
                     <?php endif; ?>
                   </div>
-                  <a class="btn btn-sm <?php echo $quiz['submitted_at'] ? 'btn-outline-secondary' : 'btn-primary'; ?> mt-3" href="learner_quizzes.php?quiz_id=<?php echo (int) $quiz['id']; ?>">
+                  <a class="btn btn-sm <?php echo $quiz['submitted_at'] ? 'btn-outline-secondary' : 'btn-primary'; ?> mt-3" href="learner_quizzes.php?quiz_id=<?php echo (int) $quiz['id']; ?><?php echo e($courseLinkSuffix); ?>">
                     <?php echo $quiz['submitted_at'] ? 'View Result' : 'Take Quiz'; ?>
                   </a>
                 </div>
@@ -470,6 +478,6 @@ $successMessages = [
       renderTimer();
     })();
   </script>
-  <script src="js/app.js?v=20260713-learner-profile"></script>
+  <script src="js/app.js?v=20260713-course-sidebar"></script>
 </body>
 </html>

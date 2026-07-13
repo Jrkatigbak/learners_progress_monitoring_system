@@ -215,7 +215,7 @@ $moduleCards = [
     ['label' => 'Materials', 'icon' => 'fa-folder-open', 'count' => count($materials), 'url' => '#materials'],
     ['label' => 'Quizzes', 'icon' => 'fa-circle-question', 'count' => count($quizzes), 'url' => 'learner_quizzes.php?course_id=' . $courseId],
     ['label' => 'Assignments', 'icon' => 'fa-file-pen', 'count' => count($assignments), 'url' => 'learner_assignments.php?course_id=' . $courseId],
-    ['label' => 'Grades', 'icon' => 'fa-star', 'count' => count($gradeItems), 'url' => 'learner_grades.php'],
+    ['label' => 'Grades', 'icon' => 'fa-star', 'count' => count($gradeItems), 'url' => 'learner_grades.php?course_id=' . $courseId],
     ['label' => 'Evaluation', 'icon' => 'fa-clipboard-check', 'count' => $evaluationSubmitted ? 1 : 0, 'url' => $evaluationReady ? 'learner_evaluation.php?course_id=' . $courseId : '#evaluation'],
     ['label' => 'Classmates', 'icon' => 'fa-users', 'count' => count($classmates), 'url' => '#classmates'],
     ['label' => 'Certificates', 'icon' => 'fa-award', 'count' => $certificateReady ? 1 : 0, 'url' => $certificateReady ? 'certificate.php?class_id=' . $classId . '&learner_id=' . (int) $learner['id'] : '#certificates'],
@@ -234,7 +234,7 @@ $moduleCards = [
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=20260713-evaluation-reports" rel="stylesheet">
+  <link href="css/style.css?v=20260713-course-sidebar" rel="stylesheet">
 </head>
 <body class="dashboard-page">
   <div class="app-layout">
@@ -561,6 +561,6 @@ $moduleCards = [
 
   <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-  <script src="js/app.js?v=20260713-evaluation-reports"></script>
+  <script src="js/app.js?v=20260713-course-sidebar"></script>
 </body>
 </html>

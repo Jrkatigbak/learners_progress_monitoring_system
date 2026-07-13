@@ -1,6 +1,7 @@
 <?php
 
 require_once __DIR__ . '/includes/auth_guard.php';
+require_once __DIR__ . '/includes/learner_course_sidebar.php';
 
 if ($auth->isAdmin()) {
     header('Location: dashboard.php');
@@ -66,6 +67,7 @@ function deleteSubmissionFile(string $filePath): void
 
 $success = $_GET['success'] ?? '';
 $errors = [];
+$courseId = max(0, (int) ($_GET['course_id'] ?? $_POST['course_id'] ?? 0));
 $assignmentId = (int) ($_GET['assignment_id'] ?? $_POST['assignment_id'] ?? 0);
 $submissionDirectory = __DIR__ . '/uploads/submissions';
 $submissionPathPrefix = 'uploads/submissions/';
@@ -177,13 +179,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'submi
             'submitted_at' => date('Y-m-d H:i:s'),
         ]);
 
-        header('Location: learner_assignments.php?assignment_id=' . (int) $activeAssignment['id'] . '&success=submitted');
+        $courseQuery = $courseId > 0 ? '&course_id=' . $courseId : '';
+        header('Location: learner_assignments.php?assignment_id=' . (int) $activeAssignment['id'] . $courseQuery . '&success=submitted');
         exit;
     }
 }
 
 $assignmentRows = [];
 if ($learner && !$activeAssignment) {
+    $courseFilter = $courseId > 0 ? ' AND courses.id = :course_id' : '';
     $assignmentListStatement = $pdo->prepare(
         "SELECT class_assignments.*,
                 classes.class_name,
@@ -207,11 +211,22 @@ if ($learner && !$activeAssignment) {
              learners.class_id = classes.id
              OR course_enrollments.id IS NOT NULL
            )
+           {$courseFilter}
          ORDER BY class_assignments.due_date IS NULL, class_assignments.due_date ASC, class_assignments.created_at DESC"
     );
-    $assignmentListStatement->execute(['learner_id' => (int) $learner['id']]);
+    $assignmentParams = ['learner_id' => (int) $learner['id']];
+    if ($courseId > 0) {
+        $assignmentParams['course_id'] = $courseId;
+    }
+    $assignmentListStatement->execute($assignmentParams);
     $assignmentRows = $assignmentListStatement->fetchAll();
 }
+
+$learnerCourseContext = $learner
+    ? kiwiLearnerCourseContext($pdo, (int) $learner['id'], $courseId, (int) ($activeAssignment['class_id'] ?? 0))
+    : null;
+$courseQuerySuffix = $learnerCourseContext ? '?course_id=' . (int) $learnerCourseContext['course_id'] : '';
+$courseLinkSuffix = $learnerCourseContext ? '&course_id=' . (int) $learnerCourseContext['course_id'] : '';
 
 $successMessages = [
     'submitted' => 'Assignment submitted successfully.',
@@ -230,7 +245,7 @@ $successMessages = [
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=20260713-learner-profile" rel="stylesheet">
+  <link href="css/style.css?v=20260713-course-sidebar" rel="stylesheet">
 </head>
 <body class="dashboard-page">
   <div class="app-layout">
@@ -242,14 +257,7 @@ $successMessages = [
           <small>Learners Progress Monitoring System</small>
         </span>
       </a>
-      <nav class="sidebar-nav">
-        <a href="learner_dashboard.php"><i class="fa-solid fa-gauge-high"></i> Dashboard</a>
-        <a href="enrolled_courses.php"><i class="fa-solid fa-book-open-reader"></i> Enrolled Class</a>
-      </nav>
-      <div class="sidebar-footer">
-        <p class="mb-1">Logged in as</p>
-        <strong><?php echo e($learnerName); ?></strong>
-      </div>
+      <?php kiwiRenderLearnerCourseSidebar($learnerCourseContext, $learnerName, 'assignments', (int) ($learner['id'] ?? 0)); ?>
     </aside>
 
     <main class="main-panel">
@@ -310,7 +318,7 @@ $successMessages = [
                 <span class="section-kicker"><?php echo e($activeAssignment['class_name']); ?></span>
                 <h2 class="h5 mb-0"><?php echo e($activeAssignment['title']); ?></h2>
               </div>
-              <a href="learner_assignments.php" class="btn btn-sm btn-outline-secondary">Back to Assignments</a>
+              <a href="learner_assignments.php<?php echo e($courseQuerySuffix); ?>" class="btn btn-sm btn-outline-secondary">Back to Assignments</a>
             </div>
 
             <div class="assignment-detail">
@@ -379,7 +387,7 @@ $successMessages = [
                       <span><strong>Submitted</strong></span>
                     <?php endif; ?>
                   </div>
-                  <a class="btn btn-sm <?php echo $assignment['submitted_at'] ? 'btn-outline-secondary' : 'btn-primary'; ?> mt-3" href="learner_assignments.php?assignment_id=<?php echo (int) $assignment['id']; ?>">
+                  <a class="btn btn-sm <?php echo $assignment['submitted_at'] ? 'btn-outline-secondary' : 'btn-primary'; ?> mt-3" href="learner_assignments.php?assignment_id=<?php echo (int) $assignment['id']; ?><?php echo e($courseLinkSuffix); ?>">
                     <?php echo $assignment['submitted_at'] ? 'View Submission' : 'Open Assignment'; ?>
                   </a>
                 </div>
@@ -393,6 +401,6 @@ $successMessages = [
 
   <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-  <script src="js/app.js?v=20260713-learner-profile"></script>
+  <script src="js/app.js?v=20260713-course-sidebar"></script>
 </body>
 </html>
