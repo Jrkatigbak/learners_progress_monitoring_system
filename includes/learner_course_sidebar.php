@@ -29,6 +29,21 @@ function kiwiLearnerCourseContext(PDO $pdo, int $learnerId, int $courseId = 0, i
     }
 
     $certificateColumns = kiwiClassCertificateColumns($pdo);
+    $certificateTemplateSelect = !empty($certificateColumns['certificate_template_image'])
+        ? ', classes.certificate_template_image'
+        : ', NULL AS certificate_template_image';
+    $certificateNameXSelect = !empty($certificateColumns['certificate_name_x'])
+        ? ', classes.certificate_name_x'
+        : ', 50 AS certificate_name_x';
+    $certificateNameYSelect = !empty($certificateColumns['certificate_name_y'])
+        ? ', classes.certificate_name_y'
+        : ', 56 AS certificate_name_y';
+    $certificateFontSizeSelect = !empty($certificateColumns['certificate_font_size'])
+        ? ', classes.certificate_font_size'
+        : ', 56 AS certificate_font_size';
+    $certificateFontColorSelect = !empty($certificateColumns['certificate_font_color'])
+        ? ', classes.certificate_font_color'
+        : ', "#1f1a17" AS certificate_font_color';
     $certificateDownloadSelect = !empty($certificateColumns['certificate_download_enabled'])
         ? ', classes.certificate_download_enabled'
         : ', 1 AS certificate_download_enabled';
@@ -37,12 +52,12 @@ function kiwiLearnerCourseContext(PDO $pdo, int $learnerId, int $courseId = 0, i
         "SELECT courses.id AS course_id,
                 courses.course_name,
                 classes.id AS class_id,
-                classes.class_name,
-                classes.certificate_template_image,
-                classes.certificate_name_x,
-                classes.certificate_name_y,
-                classes.certificate_font_size,
-                classes.certificate_font_color
+                classes.class_name
+                {$certificateTemplateSelect}
+                {$certificateNameXSelect}
+                {$certificateNameYSelect}
+                {$certificateFontSizeSelect}
+                {$certificateFontColorSelect}
                 {$certificateDownloadSelect}
          FROM courses
          INNER JOIN classes
