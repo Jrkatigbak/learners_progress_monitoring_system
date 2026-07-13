@@ -2890,7 +2890,7 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=20260713-certificate-script" rel="stylesheet">
+  <link href="css/style.css?v=20260713-evaluation-reports" rel="stylesheet">
   <?php echo kiwiSystemThemeStyle(); ?>
 </head>
 <body class="dashboard-page class-workspace-page class-workspace-<?php echo e($tool); ?>">
@@ -4069,11 +4069,30 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
                             <span>Recommend: <?php echo e((string) $response['recommend']); ?></span>
                             <span><?php echo e(date('M d, Y g:i A', strtotime((string) $response['created_at']))); ?></span>
                           </div>
+                          <div class="evaluation-rating-report">
+                            <?php foreach (kiwiEvaluationRatingItems() as $section): ?>
+                              <div class="evaluation-rating-report-section">
+                                <h4><?php echo e((string) $section['title']); ?></h4>
+                                <?php foreach ($section['items'] as $fieldName => $label): ?>
+                                  <div class="evaluation-rating-report-row">
+                                    <span><?php echo e((string) $label); ?></span>
+                                    <strong><?php echo e((string) ($response[$fieldName] ?? 'N/A')); ?></strong>
+                                  </div>
+                                <?php endforeach; ?>
+                              </div>
+                            <?php endforeach; ?>
+                          </div>
                           <?php if (!empty($response['feedback_useful']) || !empty($response['feedback_improvements']) || !empty($response['feedback_topics'])): ?>
                             <div class="evaluation-feedback">
                               <?php if (!empty($response['feedback_useful'])): ?><p><strong>Useful:</strong> <?php echo e((string) $response['feedback_useful']); ?></p><?php endif; ?>
                               <?php if (!empty($response['feedback_improvements'])): ?><p><strong>Improvements:</strong> <?php echo e((string) $response['feedback_improvements']); ?></p><?php endif; ?>
                               <?php if (!empty($response['feedback_topics'])): ?><p><strong>Future topics:</strong> <?php echo e((string) $response['feedback_topics']); ?></p><?php endif; ?>
+                            </div>
+                          <?php endif; ?>
+                          <?php if (!empty($response['attendee_name']) || !empty($response['attendee_email'])): ?>
+                            <div class="evaluation-feedback">
+                              <?php if (!empty($response['attendee_name'])): ?><p><strong>Attendee name:</strong> <?php echo e((string) $response['attendee_name']); ?></p><?php endif; ?>
+                              <?php if (!empty($response['attendee_email'])): ?><p><strong>Attendee email:</strong> <?php echo e((string) $response['attendee_email']); ?></p><?php endif; ?>
                             </div>
                           <?php endif; ?>
                         </article>
@@ -4945,6 +4964,6 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
       }
     })();
   </script>
-  <script src="js/app.js?v=20260713-certificate-bulk-download"></script>
+  <script src="js/app.js?v=20260713-evaluation-reports"></script>
 </body>
 </html>

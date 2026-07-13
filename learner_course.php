@@ -2,6 +2,7 @@
 
 require_once __DIR__ . '/includes/auth_guard.php';
 require_once __DIR__ . '/includes/evaluations.php';
+require_once __DIR__ . '/includes/certificates.php';
 
 if ($auth->isAdmin()) {
     header('Location: dashboard.php');
@@ -31,6 +32,7 @@ $learner = $learnerStatement->fetch() ?: null;
 $courseId = max(0, (int) ($_GET['course_id'] ?? 0));
 $course = null;
 $evaluationColumns = kiwiClassEvaluationColumns($pdo);
+$certificateColumns = kiwiClassCertificateColumns($pdo);
 
 if ($learner && $courseId > 0) {
     $evaluationSelect = kiwiClassEvaluationColumnsReady($evaluationColumns)
@@ -44,6 +46,9 @@ if ($learner && $courseId > 0) {
                 NULL AS seminar_presenter,
                 NULL AS seminar_date,
                 NULL AS seminar_venue';
+    $certificateSelect = kiwiClassCertificateReady($certificateColumns)
+        ? ', classes.certificate_template_image'
+        : ', NULL AS certificate_template_image';
     $courseStatement = $pdo->prepare(
         "SELECT courses.id,
                 courses.course_code,
@@ -55,6 +60,7 @@ if ($learner && $courseId > 0) {
                 classes.id AS class_id,
                 classes.class_name
                 {$evaluationSelect}
+                {$certificateSelect}
          FROM course_enrollments
          INNER JOIN courses ON courses.id = course_enrollments.course_id AND courses.deleted_at IS NULL
          LEFT JOIN classes ON courses.course_code = CONCAT('CLASS-', classes.id) AND classes.deleted_at IS NULL
@@ -80,6 +86,7 @@ if (!$learner || !$course) {
 $classId = (int) ($course['class_id'] ?? 0);
 $learnerName = trim($learner['first_name'] . ' ' . $learner['last_name']);
 $learnerInitials = strtoupper(substr($learnerName, 0, 1));
+$certificateReady = $classId > 0 && kiwiClassCertificateReady($certificateColumns) && !empty($course['certificate_template_image']);
 $classmates = [];
 $topics = [];
 $materials = [];
@@ -204,13 +211,14 @@ if ($classId > 0) {
 }
 
 $moduleCards = [
-    ['label' => 'Topics', 'icon' => 'fa-list-check', 'count' => count($topics), 'target' => 'topics'],
-    ['label' => 'Materials', 'icon' => 'fa-folder-open', 'count' => count($materials), 'target' => 'materials'],
-    ['label' => 'Quizzes', 'icon' => 'fa-circle-question', 'count' => count($quizzes), 'target' => 'quizzes'],
-    ['label' => 'Assignments', 'icon' => 'fa-file-pen', 'count' => count($assignments), 'target' => 'assignments'],
-    ['label' => 'Grades', 'icon' => 'fa-star', 'count' => count($gradeItems), 'target' => 'grades'],
-    ['label' => 'Evaluation', 'icon' => 'fa-clipboard-check', 'count' => $evaluationSubmitted ? 1 : 0, 'target' => 'evaluation'],
-    ['label' => 'Classmates', 'icon' => 'fa-users', 'count' => count($classmates), 'target' => 'classmates'],
+    ['label' => 'Topics', 'icon' => 'fa-list-check', 'count' => count($topics), 'url' => '#topics'],
+    ['label' => 'Materials', 'icon' => 'fa-folder-open', 'count' => count($materials), 'url' => '#materials'],
+    ['label' => 'Quizzes', 'icon' => 'fa-circle-question', 'count' => count($quizzes), 'url' => 'learner_quizzes.php?course_id=' . $courseId],
+    ['label' => 'Assignments', 'icon' => 'fa-file-pen', 'count' => count($assignments), 'url' => 'learner_assignments.php?course_id=' . $courseId],
+    ['label' => 'Grades', 'icon' => 'fa-star', 'count' => count($gradeItems), 'url' => 'learner_grades.php'],
+    ['label' => 'Evaluation', 'icon' => 'fa-clipboard-check', 'count' => $evaluationSubmitted ? 1 : 0, 'url' => $evaluationReady ? 'learner_evaluation.php?course_id=' . $courseId : '#evaluation'],
+    ['label' => 'Classmates', 'icon' => 'fa-users', 'count' => count($classmates), 'url' => '#classmates'],
+    ['label' => 'Certificates', 'icon' => 'fa-award', 'count' => $certificateReady ? 1 : 0, 'url' => $certificateReady ? 'certificate.php?class_id=' . $classId . '&learner_id=' . (int) $learner['id'] : '#certificates'],
 ];
 ?>
 <!doctype html>
@@ -226,7 +234,7 @@ $moduleCards = [
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=20260713-evaluations" rel="stylesheet">
+  <link href="css/style.css?v=20260713-evaluation-reports" rel="stylesheet">
 </head>
 <body class="dashboard-page">
   <div class="app-layout">
@@ -242,7 +250,7 @@ $moduleCards = [
         <a href="learner_dashboard.php"><i class="fa-solid fa-gauge-high"></i> Dashboard</a>
         <a class="active" href="enrolled_courses.php"><i class="fa-solid fa-book-open-reader"></i> Enrolled Class</a>
         <?php foreach ($moduleCards as $module): ?>
-          <a href="#<?php echo e($module['target']); ?>">
+          <a href="<?php echo e($module['url']); ?>">
             <i class="fa-solid <?php echo e($module['icon']); ?>"></i>
             <?php echo e($module['label']); ?>
             <span class="sidebar-nav-count"><?php echo (int) $module['count']; ?></span>
@@ -270,11 +278,18 @@ $moduleCards = [
         </button>
         <div class="dropdown">
           <button class="btn user-menu dropdown-toggle" data-bs-toggle="dropdown" type="button">
-            <span class="avatar"><?php echo e($learnerInitials); ?></span>
+            <span class="avatar">
+              <?php if (!empty($learner["profile_photo"])): ?>
+                <img src="<?php echo e((string) $learner["profile_photo"]); ?>" alt="<?php echo e($learnerName); ?>">
+              <?php else: ?>
+                <?php echo e($learnerInitials); ?>
+              <?php endif; ?>
+            </span>
             <span class="d-none d-sm-inline"><?php echo e($learnerName); ?></span>
           </button>
           <ul class="dropdown-menu dropdown-menu-end shadow border-0">
             <li><span class="dropdown-item-text text-secondary small"><?php echo e($currentUser['email']); ?></span></li>
+            <li><a class="dropdown-item" href="learner_profile.php"><i class="fa-solid fa-user-pen me-2"></i>Update Profile</a></li>
             <li><hr class="dropdown-divider"></li>
             <li><a class="dropdown-item text-danger" href="logout.php"><i class="fa-solid fa-arrow-right-from-bracket me-2"></i>Logout</a></li>
           </ul>
@@ -372,7 +387,6 @@ $moduleCards = [
               <span class="section-kicker">Quizzes</span>
               <h2>Available quizzes</h2>
             </div>
-            <a class="btn btn-sm btn-outline-primary" href="learner_quizzes.php?course_id=<?php echo $courseId; ?>">Open Quiz Page</a>
           </div>
           <?php if (!$quizzes): ?>
             <div class="empty-state compact"><i class="fa-solid fa-circle-question"></i><p>No quizzes yet.</p></div>
@@ -403,7 +417,6 @@ $moduleCards = [
               <span class="section-kicker">Assignments</span>
               <h2>Available assignments</h2>
             </div>
-            <a class="btn btn-sm btn-outline-primary" href="learner_assignments.php?course_id=<?php echo $courseId; ?>">Open Assignment Page</a>
           </div>
           <?php if (!$assignments): ?>
             <div class="empty-state compact"><i class="fa-solid fa-file-pen"></i><p>No assignments yet.</p></div>
@@ -434,7 +447,6 @@ $moduleCards = [
               <span class="section-kicker">Grades</span>
               <h2>Grade items</h2>
             </div>
-            <a class="btn btn-sm btn-outline-primary" href="learner_grades.php">Open Grades</a>
           </div>
           <?php if (!$gradeItems): ?>
             <div class="empty-state compact"><i class="fa-solid fa-star"></i><p>No grade items yet.</p></div>
@@ -465,11 +477,6 @@ $moduleCards = [
               <span class="section-kicker">Evaluation</span>
               <h2><?php echo e(kiwiEvaluationFormTitle($course)); ?></h2>
             </div>
-            <?php if ($evaluationReady): ?>
-              <a class="btn btn-sm btn-primary" href="learner_evaluation.php?course_id=<?php echo $courseId; ?>">
-                <?php echo $evaluationSubmitted ? 'Update Evaluation' : 'Open Evaluation'; ?>
-              </a>
-            <?php endif; ?>
           </div>
           <?php if (!$evaluationReady): ?>
             <div class="empty-state compact"><i class="fa-solid fa-clipboard-check"></i><p>Evaluation form is not ready yet.</p></div>
@@ -483,6 +490,9 @@ $moduleCards = [
                   <p><?php echo $evaluationSubmitted ? 'Your response has been submitted. You may update it anytime.' : 'Share your feedback using the evaluation form.'; ?></p>
                 </div>
                 <strong><?php echo $evaluationSubmitted ? 'Submitted' : 'Pending'; ?></strong>
+                <a class="btn btn-sm btn-primary" href="learner_evaluation.php?course_id=<?php echo $courseId; ?>">
+                  <?php echo $evaluationSubmitted ? 'Update Evaluation' : 'Answer Evaluation'; ?>
+                </a>
               </article>
             </div>
           <?php endif; ?>
@@ -519,12 +529,38 @@ $moduleCards = [
             </div>
           <?php endif; ?>
         </section>
+
+        <section class="learner-course-section" id="certificates">
+          <div class="section-heading-row">
+            <div>
+              <span class="section-kicker">Certificates</span>
+              <h2>Course certificate</h2>
+            </div>
+          </div>
+          <?php if (!$certificateReady): ?>
+            <div class="empty-state compact"><i class="fa-solid fa-award"></i><p>No certificate is available yet.</p></div>
+          <?php else: ?>
+            <div class="learner-course-list">
+              <article class="learner-course-list-item">
+                <i class="fa-solid fa-award"></i>
+                <div>
+                  <span><?php echo e($course['course_code']); ?></span>
+                  <h3><?php echo e($course['course_name']); ?></h3>
+                  <p>Your certificate is ready to preview or download.</p>
+                </div>
+                <a class="btn btn-sm btn-primary" href="certificate.php?class_id=<?php echo $classId; ?>&learner_id=<?php echo (int) $learner['id']; ?>" target="_blank" rel="noopener">
+                  View
+                </a>
+              </article>
+            </div>
+          <?php endif; ?>
+        </section>
       </section>
     </main>
   </div>
 
   <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-  <script src="js/app.js?v=20260713-evaluations"></script>
+  <script src="js/app.js?v=20260713-evaluation-reports"></script>
 </body>
 </html>

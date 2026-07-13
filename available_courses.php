@@ -108,7 +108,7 @@ $successMessages = [
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=20260713-learner-sidebar-teacher-email" rel="stylesheet">
+  <link href="css/style.css?v=20260713-learner-profile" rel="stylesheet">
 </head>
 <body class="dashboard-page">
   <div class="app-layout">
@@ -145,11 +145,18 @@ $successMessages = [
         </button>
         <div class="dropdown">
           <button class="btn user-menu dropdown-toggle" data-bs-toggle="dropdown" type="button">
-            <span class="avatar"><?php echo e($learnerInitials); ?></span>
+            <span class="avatar">
+              <?php if (!empty($learner["profile_photo"])): ?>
+                <img src="<?php echo e((string) $learner["profile_photo"]); ?>" alt="<?php echo e($learnerName); ?>">
+              <?php else: ?>
+                <?php echo e($learnerInitials); ?>
+              <?php endif; ?>
+            </span>
             <span class="d-none d-sm-inline"><?php echo e($learnerName); ?></span>
           </button>
           <ul class="dropdown-menu dropdown-menu-end shadow border-0">
             <li><span class="dropdown-item-text text-secondary small"><?php echo e($currentUser['email']); ?></span></li>
+            <li><a class="dropdown-item" href="learner_profile.php"><i class="fa-solid fa-user-pen me-2"></i>Update Profile</a></li>
             <li><hr class="dropdown-divider"></li>
             <li><a class="dropdown-item text-danger" href="logout.php"><i class="fa-solid fa-arrow-right-from-bracket me-2"></i>Logout</a></li>
           </ul>
@@ -230,6 +237,6 @@ $successMessages = [
 
   <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-  <script src="js/app.js?v=20260713-learner-sidebar-teacher-email"></script>
+  <script src="js/app.js?v=20260713-learner-profile"></script>
 </body>
 </html>

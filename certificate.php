@@ -89,6 +89,7 @@ if (!$class || empty($class['certificate_template_image'])) {
 
 $isAdminSideUser = $auth->isAdminSideUser();
 $isSystemAdmin = (($currentUser['role'] ?? '') === 'admin');
+$courseId = certificateClassCourseId($pdo, $classId);
 
 if ($isAdminSideUser) {
     if (!$isSystemAdmin && !kiwiCan($pdo, 'class_certificates.view')) {
@@ -120,6 +121,39 @@ if ($isAdminSideUser) {
         echo 'You can only view certificates for assigned classes.';
         exit;
     }
+} elseif ($auth->isLearner()) {
+    $learnerStatement = $pdo->prepare(
+        'SELECT learners.id
+         FROM learners
+         LEFT JOIN course_enrollments
+           ON course_enrollments.learner_id = learners.id
+          AND course_enrollments.deleted_at IS NULL
+         WHERE learners.email = :email
+           AND learners.deleted_at IS NULL
+           AND (
+             learners.class_id = :class_id
+             OR (
+               course_enrollments.course_id = :course_id
+               AND course_enrollments.enrollment_status IN ("Enrolled", "In Progress", "Completed")
+             )
+           )
+         LIMIT 1'
+    );
+    $learnerStatement->execute([
+        'email' => $currentUser['email'],
+        'class_id' => $classId,
+        'course_id' => $courseId,
+    ]);
+    $loggedLearnerId = (int) $learnerStatement->fetchColumn();
+
+    if ($loggedLearnerId <= 0) {
+        http_response_code(403);
+        echo 'You can only view certificates for enrolled classes.';
+        exit;
+    }
+
+    $downloadAll = false;
+    $learnerId = $loggedLearnerId;
 } else {
     http_response_code(403);
     echo 'You do not have permission to view certificates.';
@@ -127,7 +161,6 @@ if ($isAdminSideUser) {
 }
 
 $templatePath = __DIR__ . '/' . ltrim((string) $class['certificate_template_image'], '/');
-$courseId = certificateClassCourseId($pdo, $classId);
 $learners = certificateLearnerRows($pdo, $classId, $courseId, $downloadAll ? 0 : $learnerId);
 
 if (!$learners) {
