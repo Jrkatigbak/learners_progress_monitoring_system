@@ -3281,7 +3281,6 @@ body {
 .certificate-template-preview img {
   display: block;
   width: 100%;
-  aspect-ratio: 1 / 1.414;
   object-fit: contain;
 }
 

@@ -2890,7 +2890,7 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=20260713-evaluation-reports" rel="stylesheet">
+  <link href="css/style.css?v=20260713-certificate-preview" rel="stylesheet">
   <?php echo kiwiSystemThemeStyle(); ?>
 </head>
 <body class="dashboard-page class-workspace-page class-workspace-<?php echo e($tool); ?>">
@@ -4964,6 +4964,6 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
       }
     })();
   </script>
-  <script src="js/app.js?v=20260713-evaluation-reports"></script>
+  <script src="js/app.js?v=20260713-certificate-preview"></script>
 </body>
 </html>
