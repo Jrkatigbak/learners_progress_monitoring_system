@@ -1,6 +1,7 @@
 <?php
 
 require_once __DIR__ . '/includes/auth_guard.php';
+require_once __DIR__ . '/includes/evaluations.php';
 
 if ($auth->isAdmin()) {
     header('Location: dashboard.php');
@@ -29,8 +30,20 @@ $learner = $learnerStatement->fetch() ?: null;
 
 $courseId = max(0, (int) ($_GET['course_id'] ?? 0));
 $course = null;
+$evaluationColumns = kiwiClassEvaluationColumns($pdo);
 
 if ($learner && $courseId > 0) {
+    $evaluationSelect = kiwiClassEvaluationColumnsReady($evaluationColumns)
+        ? ', classes.class_type,
+                classes.seminar_title,
+                classes.seminar_presenter,
+                classes.seminar_date,
+                classes.seminar_venue'
+        : ', "Course" AS class_type,
+                NULL AS seminar_title,
+                NULL AS seminar_presenter,
+                NULL AS seminar_date,
+                NULL AS seminar_venue';
     $courseStatement = $pdo->prepare(
         "SELECT courses.id,
                 courses.course_code,
@@ -41,6 +54,7 @@ if ($learner && $courseId > 0) {
                 course_enrollments.enrolled_at,
                 classes.id AS class_id,
                 classes.class_name
+                {$evaluationSelect}
          FROM course_enrollments
          INNER JOIN courses ON courses.id = course_enrollments.course_id AND courses.deleted_at IS NULL
          LEFT JOIN classes ON courses.course_code = CONCAT('CLASS-', classes.id) AND classes.deleted_at IS NULL
@@ -72,6 +86,8 @@ $materials = [];
 $quizzes = [];
 $assignments = [];
 $gradeItems = [];
+$evaluationSubmitted = false;
+$evaluationReady = kiwiClassEvaluationColumnsReady($evaluationColumns) && kiwiClassEvaluationsTableReady($pdo);
 
 if ($classId > 0) {
     $classmatesStatement = $pdo->prepare(
@@ -176,6 +192,15 @@ if ($classId > 0) {
     );
     $gradeItemStatement->execute(['class_id' => $classId]);
     $gradeItems = $gradeItemStatement->fetchAll();
+
+    if ($evaluationReady) {
+        $evaluationStatement = $pdo->prepare('SELECT id FROM class_evaluations WHERE class_id = :class_id AND learner_id = :learner_id AND deleted_at IS NULL LIMIT 1');
+        $evaluationStatement->execute([
+            'class_id' => $classId,
+            'learner_id' => (int) $learner['id'],
+        ]);
+        $evaluationSubmitted = (bool) $evaluationStatement->fetchColumn();
+    }
 }
 
 $moduleCards = [
@@ -184,6 +209,7 @@ $moduleCards = [
     ['label' => 'Quizzes', 'icon' => 'fa-circle-question', 'count' => count($quizzes), 'target' => 'quizzes'],
     ['label' => 'Assignments', 'icon' => 'fa-file-pen', 'count' => count($assignments), 'target' => 'assignments'],
     ['label' => 'Grades', 'icon' => 'fa-star', 'count' => count($gradeItems), 'target' => 'grades'],
+    ['label' => 'Evaluation', 'icon' => 'fa-clipboard-check', 'count' => $evaluationSubmitted ? 1 : 0, 'target' => 'evaluation'],
     ['label' => 'Classmates', 'icon' => 'fa-users', 'count' => count($classmates), 'target' => 'classmates'],
 ];
 ?>
@@ -200,7 +226,7 @@ $moduleCards = [
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=20260713-learner-course-view" rel="stylesheet">
+  <link href="css/style.css?v=20260713-evaluations" rel="stylesheet">
 </head>
 <body class="dashboard-page">
   <div class="app-layout">
@@ -215,6 +241,13 @@ $moduleCards = [
       <nav class="sidebar-nav">
         <a href="learner_dashboard.php"><i class="fa-solid fa-gauge-high"></i> Dashboard</a>
         <a class="active" href="enrolled_courses.php"><i class="fa-solid fa-book-open-reader"></i> Enrolled Class</a>
+        <?php foreach ($moduleCards as $module): ?>
+          <a href="#<?php echo e($module['target']); ?>">
+            <i class="fa-solid <?php echo e($module['icon']); ?>"></i>
+            <?php echo e($module['label']); ?>
+            <span class="sidebar-nav-count"><?php echo (int) $module['count']; ?></span>
+          </a>
+        <?php endforeach; ?>
       </nav>
       <div class="sidebar-footer">
         <p class="mb-1">Logged in as</p>
@@ -249,10 +282,6 @@ $moduleCards = [
       </header>
 
       <section class="content-wrap">
-        <a class="btn btn-sm btn-outline-secondary mb-3" href="enrolled_courses.php">
-          <i class="fa-solid fa-arrow-left me-2"></i>Back to Enrolled Class
-        </a>
-
         <article class="learner-course-hero">
           <div class="learner-course-hero-media">
             <?php if (!empty($course['banner_image'])): ?>
@@ -275,16 +304,6 @@ $moduleCards = [
             </div>
           </div>
         </article>
-
-        <div class="learner-course-module-grid">
-          <?php foreach ($moduleCards as $module): ?>
-            <a href="#<?php echo e($module['target']); ?>" class="learner-course-module-card">
-              <i class="fa-solid <?php echo e($module['icon']); ?>"></i>
-              <span><?php echo e($module['label']); ?></span>
-              <strong><?php echo (int) $module['count']; ?></strong>
-            </a>
-          <?php endforeach; ?>
-        </div>
 
         <section class="learner-course-section" id="topics">
           <div class="section-heading-row">
@@ -440,6 +459,35 @@ $moduleCards = [
           <?php endif; ?>
         </section>
 
+        <section class="learner-course-section" id="evaluation">
+          <div class="section-heading-row">
+            <div>
+              <span class="section-kicker">Evaluation</span>
+              <h2><?php echo e(kiwiEvaluationFormTitle($course)); ?></h2>
+            </div>
+            <?php if ($evaluationReady): ?>
+              <a class="btn btn-sm btn-primary" href="learner_evaluation.php?course_id=<?php echo $courseId; ?>">
+                <?php echo $evaluationSubmitted ? 'Update Evaluation' : 'Open Evaluation'; ?>
+              </a>
+            <?php endif; ?>
+          </div>
+          <?php if (!$evaluationReady): ?>
+            <div class="empty-state compact"><i class="fa-solid fa-clipboard-check"></i><p>Evaluation form is not ready yet.</p></div>
+          <?php else: ?>
+            <div class="learner-course-list">
+              <article class="learner-course-list-item">
+                <i class="fa-solid fa-clipboard-check"></i>
+                <div>
+                  <span><?php echo e((string) ($course['class_type'] ?? 'Course')); ?></span>
+                  <h3><?php echo e((string) ($course['seminar_title'] ?? $course['course_name'])); ?></h3>
+                  <p><?php echo $evaluationSubmitted ? 'Your response has been submitted. You may update it anytime.' : 'Share your feedback using the evaluation form.'; ?></p>
+                </div>
+                <strong><?php echo $evaluationSubmitted ? 'Submitted' : 'Pending'; ?></strong>
+              </article>
+            </div>
+          <?php endif; ?>
+        </section>
+
         <section class="learner-course-section" id="classmates">
           <div class="section-heading-row">
             <div>
@@ -477,6 +525,6 @@ $moduleCards = [
 
   <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-  <script src="js/app.js?v=20260713-learner-course-view"></script>
+  <script src="js/app.js?v=20260713-evaluations"></script>
 </body>
 </html>

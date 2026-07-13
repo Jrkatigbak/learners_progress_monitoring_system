@@ -31,6 +31,9 @@ function kiwiClassCertificateReady(array $columns): bool
 function kiwiCertificateFontPath(): string
 {
     $candidates = [
+        __DIR__ . '/../assets/fonts/GreatVibes-Regular.ttf',
+        '/System/Library/Fonts/Supplemental/SignPainter.ttc',
+        '/System/Library/Fonts/Supplemental/Brush Script.ttf',
         __DIR__ . '/../assets/fonts/DejaVuSans-Bold.ttf',
         '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
         '/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf',
@@ -102,14 +105,14 @@ function kiwiRenderCertificateImage(string $templatePath, string $learnerName, f
     $color = imagecolorallocate($image, $red, $green, $blue);
     $font = kiwiCertificateFontPath();
     $fontSize = max(12, min(220, $fontSize));
-    $targetWidth = $width * 0.78;
+    $targetWidth = $width * 0.94;
     $centerX = ($width * max(0, min(100, $nameX))) / 100;
-    $baselineY = ($height * max(0, min(100, $nameY))) / 100;
+    $centerY = ($height * max(0, min(100, $nameY))) / 100;
 
     if ($font !== '') {
         while ($fontSize > 12) {
             $box = imagettfbbox($fontSize, 0, $font, $learnerName);
-            $textWidth = abs($box[2] - $box[0]);
+            $textWidth = max($box[0], $box[2]) - min($box[0], $box[2]);
 
             if ($textWidth <= $targetWidth) {
                 break;
@@ -119,10 +122,8 @@ function kiwiRenderCertificateImage(string $templatePath, string $learnerName, f
         }
 
         $box = imagettfbbox($fontSize, 0, $font, $learnerName);
-        $textWidth = abs($box[2] - $box[0]);
-        $textHeight = abs($box[7] - $box[1]);
-        $x = (int) round($centerX - ($textWidth / 2));
-        $y = (int) round($baselineY + ($textHeight / 2));
+        $x = (int) round($centerX - (($box[0] + $box[2]) / 2));
+        $y = (int) round($centerY - (($box[1] + $box[7]) / 2));
         imagettftext($image, $fontSize, 0, $x, $y, $color, $font, $learnerName);
 
         return $image;
@@ -131,7 +132,7 @@ function kiwiRenderCertificateImage(string $templatePath, string $learnerName, f
     $fallbackFont = 5;
     $textWidth = imagefontwidth($fallbackFont) * strlen($learnerName);
     $textHeight = imagefontheight($fallbackFont);
-    imagestring($image, $fallbackFont, (int) round($centerX - ($textWidth / 2)), (int) round($baselineY - ($textHeight / 2)), $learnerName, $color);
+    imagestring($image, $fallbackFont, (int) round($centerX - ($textWidth / 2)), (int) round($centerY - ($textHeight / 2)), $learnerName, $color);
 
     return $image;
 }

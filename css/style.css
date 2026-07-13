@@ -16,6 +16,14 @@
   --topbar: rgba(255, 255, 255, 0.92);
 }
 
+@font-face {
+  font-family: "Kiwi Certificate Script";
+  src: url("../assets/fonts/GreatVibes-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
 [data-theme="dark"] {
   --ink: #fff7ea;
   --muted: #c9b9a6;
@@ -345,6 +353,19 @@ body {
 .sidebar-nav a.active {
   background: linear-gradient(135deg, rgba(245, 130, 32, 0.12), rgba(247, 200, 75, 0.16));
   color: var(--brand-dark);
+}
+
+.sidebar-nav-count {
+  display: inline-grid;
+  min-width: 24px;
+  height: 24px;
+  margin-left: auto;
+  place-items: center;
+  color: var(--brand-dark);
+  font-size: 0.76rem;
+  font-weight: 800;
+  border-radius: 999px;
+  background: var(--brand-soft);
 }
 
 .sidebar-footer {
@@ -2130,6 +2151,12 @@ body {
   transform: none;
 }
 
+.btn.is-loading,
+.btn.is-loading:disabled {
+  cursor: wait;
+  opacity: 0.82;
+}
+
 .learner-icon-button.is-danger {
   color: var(--danger);
 }
@@ -3054,7 +3081,7 @@ body {
 }
 
 .learner-course-hero-media {
-  aspect-ratio: 8 / 3;
+  min-height: clamp(300px, 46vw, 620px);
   overflow: hidden;
   background: linear-gradient(135deg, rgba(245, 130, 32, 0.18), rgba(76, 143, 23, 0.22));
 }
@@ -3066,7 +3093,8 @@ body {
 }
 
 .learner-course-hero-media img {
-  object-fit: cover;
+  object-fit: contain;
+  background: var(--surface-alt);
 }
 
 .learner-course-hero-content {
@@ -3086,7 +3114,7 @@ body {
 
 .learner-course-module-grid {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   gap: 12px;
   margin-bottom: 18px;
 }
@@ -3249,6 +3277,18 @@ body {
   object-fit: contain;
 }
 
+.certificate-name-font-sample {
+  margin-top: 16px;
+  padding: 14px 16px;
+  border: 1px dashed var(--line);
+  border-radius: 14px;
+  background: var(--surface-alt);
+  font-family: "Kiwi Certificate Script", cursive;
+  font-size: clamp(2.5rem, 5vw, 4rem);
+  line-height: 1;
+  text-align: center;
+}
+
 .certificate-learner-list {
   display: grid;
   gap: 12px;
@@ -3273,6 +3313,137 @@ body {
 .certificate-learner-row span {
   color: var(--muted);
   font-size: 0.86rem;
+}
+
+.evaluation-settings-card {
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--surface-alt);
+}
+
+.evaluation-response-list {
+  display: grid;
+  gap: 14px;
+}
+
+.evaluation-response-card {
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--surface-alt);
+}
+
+.evaluation-response-card h3 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 850;
+}
+
+.evaluation-response-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+.evaluation-feedback {
+  display: grid;
+  gap: 6px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.evaluation-feedback p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.evaluation-form-card {
+  padding: 28px;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  background: var(--surface);
+  box-shadow: 0 16px 42px var(--shadow);
+}
+
+.evaluation-form-head {
+  padding-bottom: 22px;
+  border-bottom: 1px solid var(--line);
+}
+
+.evaluation-form-head h2 {
+  margin-bottom: 22px;
+  font-size: 1.35rem;
+  font-weight: 900;
+}
+
+.evaluation-details {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 16px;
+}
+
+.evaluation-details p {
+  margin: 0;
+}
+
+.evaluation-scale {
+  display: grid;
+  gap: 8px;
+  margin: 22px 0;
+  padding: 18px;
+  border-radius: 16px;
+  background: var(--surface-alt);
+}
+
+.evaluation-scale span {
+  color: var(--muted);
+}
+
+.evaluation-section {
+  padding: 22px 0;
+  border-top: 1px solid var(--line);
+}
+
+.evaluation-section h3 {
+  margin-bottom: 16px;
+  font-size: 1rem;
+  font-weight: 900;
+}
+
+.evaluation-rating-table {
+  display: grid;
+  gap: 0;
+}
+
+.evaluation-rating-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) repeat(5, 38px);
+  align-items: center;
+  gap: 8px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.evaluation-rating-row label {
+  margin: 0;
+}
+
+.evaluation-rating-row input {
+  justify-self: center;
+}
+
+.evaluation-rating-header {
+  color: var(--ink);
+  font-weight: 850;
+}
+
+.evaluation-rating-header span {
+  text-align: center;
 }
 
 .classmate-list {
@@ -3518,6 +3689,15 @@ body {
   .certificate-learner-row {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .evaluation-form-card {
+    padding: 18px;
+  }
+
+  .evaluation-rating-row {
+    grid-template-columns: minmax(0, 1fr) repeat(5, 28px);
+    gap: 6px;
   }
 
   .enrollment-link-copy-bar {

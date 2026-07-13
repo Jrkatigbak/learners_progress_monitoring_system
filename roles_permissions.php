@@ -22,6 +22,7 @@ $permissionRows = [
     'class_assignments' => ['module' => 'Class Workspace', 'label' => 'Class Assignments', 'view' => 'class_assignments.view', 'add' => 'class_assignments.add', 'edit' => 'class_assignments.edit', 'delete' => 'class_assignments.delete'],
     'class_grades' => ['module' => 'Class Workspace', 'label' => 'Class Grades', 'view' => 'class_grades.view', 'add' => 'class_grades.add', 'edit' => 'class_grades.edit', 'delete' => 'class_grades.delete'],
     'class_certificates' => ['module' => 'Class Workspace', 'label' => 'Class Certificates', 'view' => 'class_certificates.view', 'add' => 'class_certificates.add', 'edit' => 'class_certificates.edit', 'delete' => 'class_certificates.delete'],
+    'class_evaluations' => ['module' => 'Class Workspace', 'label' => 'Class Evaluations', 'view' => 'class_evaluations.view', 'add' => 'class_evaluations.add', 'edit' => 'class_evaluations.edit', 'delete' => 'class_evaluations.delete'],
 ];
 
 function e(string $value): string

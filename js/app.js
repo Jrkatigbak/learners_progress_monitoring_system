@@ -181,6 +181,31 @@ $(function () {
       .html('<span class="spinner-border spinner-border-sm" aria-hidden="true"></span><span class="visually-hidden">Sending credentials</span>');
   });
 
+  $(document).on('submit', '.enrollment-approve-form', function () {
+    var $form = $(this);
+    var $button = $form.find('button[type="submit"]').first();
+
+    $button
+      .prop('disabled', true)
+      .addClass('is-loading')
+      .html('<span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>Enrolling...');
+
+    $('.enrollment-approve-form button[type="submit"]').not($button).prop('disabled', true);
+
+    if (window.Swal) {
+      Swal.fire({
+        title: 'Enrolling learner',
+        text: 'Creating the learner account and sending login credentials. Please wait...',
+        allowOutsideClick: false,
+        allowEscapeKey: false,
+        showConfirmButton: false,
+        didOpen: function () {
+          Swal.showLoading();
+        }
+      });
+    }
+  });
+
   var materialLinkIndex = 1;
   var selectedMaterialFiles = [];
 
