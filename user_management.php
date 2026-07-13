@@ -193,7 +193,7 @@ $successMessages = [
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=20260629-mail-check-release" rel="stylesheet">
+  <link href="css/style.css?v=20260713-learner-sidebar-teacher-email" rel="stylesheet">
   <?php echo kiwiSystemThemeStyle(); ?>
 </head>
 <body class="dashboard-page">
@@ -322,6 +322,6 @@ $successMessages = [
 
   <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-  <script src="js/app.js?v=20260629-mail-check-release"></script>
+  <script src="js/app.js?v=20260713-learner-sidebar-teacher-email"></script>
 </body>
 </html>

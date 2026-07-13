@@ -250,7 +250,7 @@ $successMessages = [
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=20260629-mail-check-release" rel="stylesheet">
+  <link href="css/style.css?v=20260713-learner-sidebar-teacher-email" rel="stylesheet">
 </head>
 <body class="dashboard-page">
   <div class="app-layout">
@@ -471,6 +471,6 @@ $successMessages = [
       });
     </script>
   <?php endif; ?>
-  <script src="js/app.js?v=20260629-mail-check-release"></script>
+  <script src="js/app.js?v=20260713-learner-sidebar-teacher-email"></script>
 </body>
 </html>

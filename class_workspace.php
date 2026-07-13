@@ -100,9 +100,9 @@ function classWorkspaceLoginUrl(): string
     return $scheme . '://' . $host . ($basePath ? $basePath : '') . '/login.php';
 }
 
-function sendClassLearnerCredentialEmail(SmtpMailer $mailer, string $email, string $name, string $password, string $loginUrl): bool
+function sendClassLearnerCredentialEmail(SmtpMailer $mailer, string $email, string $name, string $className, string $password, string $loginUrl): bool
 {
-    $subject = 'Learners Progress Monitoring System login credentials';
+    $subject = kiwiLmsClassEmailSubject($className, 'Login Credentials Reset');
     $textBody = "Hello {$name},\n\n"
         . "Your Learners Progress Monitoring System login credentials were reset.\n\n"
         . "Login link: {$loginUrl}\n"
@@ -116,6 +116,34 @@ function sendClassLearnerCredentialEmail(SmtpMailer $mailer, string $email, stri
         . '<strong>Email:</strong> ' . e($email) . '<br>'
         . '<strong>Password:</strong> ' . e($password) . '</p>'
         . '<p>Please keep these credentials secure.</p>'
+        . '<p>Kiwi Digital Tech</p>';
+
+    return $mailer->send($email, $name, $subject, $htmlBody, $textBody);
+}
+
+function classWorkspaceUrl(int $classId): string
+{
+    $isHttps = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+        || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https');
+    $scheme = $isHttps ? 'https' : 'http';
+    $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
+    $basePath = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '')), '/');
+
+    return $scheme . '://' . $host . ($basePath ? $basePath : '') . '/class_workspace.php?class_id=' . $classId;
+}
+
+function sendClassTeacherAssignedEmail(SmtpMailer $mailer, string $email, string $name, string $className, string $workspaceUrl): bool
+{
+    $subject = kiwiLmsClassEmailSubject($className, 'Teacher Class Assignment');
+    $textBody = "Hello {$name},\n\n"
+        . "You have been assigned as a teacher for {$className}.\n\n"
+        . "Open class workspace: {$workspaceUrl}\n"
+        . "Login link: " . classWorkspaceLoginUrl() . "\n\n"
+        . "Kiwi Digital Tech";
+    $htmlBody = '<p>Hello ' . e($name) . ',</p>'
+        . '<p>You have been assigned as a teacher for <strong>' . e($className) . '</strong>.</p>'
+        . '<p><strong>Open class workspace:</strong> <a href="' . e($workspaceUrl) . '">' . e($workspaceUrl) . '</a><br>'
+        . '<strong>Login link:</strong> <a href="' . e(classWorkspaceLoginUrl()) . '">' . e(classWorkspaceLoginUrl()) . '</a></p>'
         . '<p>Kiwi Digital Tech</p>';
 
     return $mailer->send($email, $name, $subject, $htmlBody, $textBody);
@@ -956,7 +984,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             ]);
 
             $mailer = new SmtpMailer($mailerConfig);
-            $emailSent = sendClassLearnerCredentialEmail($mailer, $learnerEmail, $learnerName, $learnerPassword, classWorkspaceLoginUrl());
+            $emailSent = sendClassLearnerCredentialEmail($mailer, $learnerEmail, $learnerName, (string) $class['class_name'], $learnerPassword, classWorkspaceLoginUrl());
             $emailStatus = $emailSent ? 'sent' : 'failed';
             $mailError = $emailStatus === 'failed' ? '&mail_error=' . urlencode($mailer->getLastError()) : '';
 
@@ -1090,7 +1118,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!$errors) {
             // A teacher should be hidden only when already connected to this class.
             $eligibleStatement = $pdo->prepare(
-                'SELECT teachers.id
+                'SELECT teachers.id, teachers.full_name, teachers.email
                  FROM teachers
                  LEFT JOIN class_teachers
                     ON class_teachers.teacher_id = teachers.id
@@ -1113,6 +1141,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                  ON DUPLICATE KEY UPDATE deleted_at = NULL'
             );
             $addedCount = 0;
+            $teachersToNotify = [];
 
             foreach ($selectedTeacherIds as $teacherId) {
                 $eligibleStatement->execute([
@@ -1121,7 +1150,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'teacher_id' => $teacherId,
                 ]);
 
-                if (!$eligibleStatement->fetch()) {
+                $eligibleTeacher = $eligibleStatement->fetch() ?: null;
+
+                if (!$eligibleTeacher) {
                     continue;
                 }
 
@@ -1130,9 +1161,41 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'teacher_id' => $teacherId,
                 ]);
                 $addedCount++;
+                $teachersToNotify[] = $eligibleTeacher;
             }
 
-            header('Location: class_workspace.php?class_id=' . $classId . '&tool=teachers&success=teachers_added&added=' . $addedCount);
+            $teacherEmailStatus = 'skipped';
+            $teacherMailError = '';
+
+            if ($teachersToNotify) {
+                // Notify newly assigned teachers after the assignment is saved so the email reflects real access.
+                $mailer = new SmtpMailer($mailerConfig);
+                $workspaceUrl = classWorkspaceUrl($classId);
+                $emailFailures = [];
+                $sentCount = 0;
+
+                foreach ($teachersToNotify as $teacherToNotify) {
+                    $teacherEmail = trim((string) ($teacherToNotify['email'] ?? ''));
+                    $teacherName = trim((string) ($teacherToNotify['full_name'] ?? ''));
+
+                    if ($teacherEmail === '' || !filter_var($teacherEmail, FILTER_VALIDATE_EMAIL)) {
+                        $emailFailures[] = $teacherName !== '' ? $teacherName : 'Teacher';
+                        continue;
+                    }
+
+                    if (sendClassTeacherAssignedEmail($mailer, $teacherEmail, $teacherName, (string) $class['class_name'], $workspaceUrl)) {
+                        $sentCount++;
+                    } else {
+                        $emailFailures[] = $teacherName !== '' ? $teacherName : $teacherEmail;
+                    }
+                }
+
+                $teacherEmailStatus = $emailFailures ? 'failed' : ($sentCount > 0 ? 'sent' : 'skipped');
+                $teacherMailError = $emailFailures ? 'Could not notify: ' . implode(', ', $emailFailures) . '. ' . $mailer->getLastError() : '';
+            }
+
+            $teacherMailQuery = '&teacher_email=' . $teacherEmailStatus . ($teacherMailError !== '' ? '&mail_error=' . urlencode($teacherMailError) : '');
+            header('Location: class_workspace.php?class_id=' . $classId . '&tool=teachers&success=teachers_added&added=' . $addedCount . $teacherMailQuery);
             exit;
         }
 
@@ -2633,6 +2696,7 @@ $successMessages = [
 ];
 $credentialEmailStatus = $_GET['credential_email'] ?? '';
 $notificationEmailStatus = $_GET['notification_email'] ?? '';
+$teacherEmailStatus = $_GET['teacher_email'] ?? '';
 $mailError = trim((string) ($_GET['mail_error'] ?? ''));
 ?>
 <!doctype html>
@@ -2648,7 +2712,7 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=20260629-mail-check-release" rel="stylesheet">
+  <link href="css/style.css?v=20260713-learner-sidebar-teacher-email" rel="stylesheet">
   <?php echo kiwiSystemThemeStyle(); ?>
 </head>
 <body class="dashboard-page class-workspace-page class-workspace-<?php echo e($tool); ?>">
@@ -2738,6 +2802,14 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
             <?php echo $notificationEmailStatus === 'sent'
                 ? 'The enrollment notification email was sent successfully.'
                 : 'The enrollment request was updated, but the notification email could not be sent.'; ?>
+          </div>
+        <?php endif; ?>
+
+        <?php if (in_array($teacherEmailStatus, ['sent', 'failed'], true)): ?>
+          <div class="alert <?php echo $teacherEmailStatus === 'sent' ? 'alert-info' : 'alert-warning'; ?>" role="alert">
+            <?php echo $teacherEmailStatus === 'sent'
+                ? 'The teacher assignment notification email was sent successfully.'
+                : 'The teacher was assigned, but the notification email could not be sent.' . ($mailError !== '' ? ' ' . e($mailError) : ''); ?>
           </div>
         <?php endif; ?>
 
@@ -4475,6 +4547,6 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
       }
     })();
   </script>
-  <script src="js/app.js?v=20260629-mail-check-release"></script>
+  <script src="js/app.js?v=20260713-learner-sidebar-teacher-email"></script>
 </body>
 </html>

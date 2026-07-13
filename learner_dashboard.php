@@ -32,12 +32,13 @@ if ($learner) {
         "SELECT courses.id,
                 courses.course_code,
                 courses.course_name,
-                courses.banner_image,
+                COALESCE(NULLIF(courses.banner_image, ''), classes.banner_image) AS banner_image,
                 courses.description,
                 course_enrollments.enrollment_status,
                 course_enrollments.enrolled_at
          FROM course_enrollments
          INNER JOIN courses ON courses.id = course_enrollments.course_id AND courses.deleted_at IS NULL
+         LEFT JOIN classes ON courses.course_code = CONCAT('CLASS-', classes.id) AND classes.deleted_at IS NULL
          WHERE course_enrollments.learner_id = :learner_id
            AND courses.status = 'Active'
            AND course_enrollments.enrollment_status IN ('Enrolled', 'In Progress', 'Completed')
@@ -92,7 +93,7 @@ $learnerInitials = strtoupper(substr($learnerName, 0, 1));
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=20260629-mail-check-release" rel="stylesheet">
+  <link href="css/style.css?v=20260713-learner-sidebar-teacher-email" rel="stylesheet">
 </head>
 <body class="dashboard-page">
   <div class="app-layout">
@@ -107,11 +108,7 @@ $learnerInitials = strtoupper(substr($learnerName, 0, 1));
       </a>
       <nav class="sidebar-nav">
         <a class="active" href="learner_dashboard.php"><i class="fa-solid fa-gauge-high"></i> Dashboard</a>
-        <a href="available_courses.php"><i class="fa-solid fa-book-open"></i> Available Class</a>
         <a href="enrolled_courses.php"><i class="fa-solid fa-book-open-reader"></i> Enrolled Class</a>
-        <a href="learner_quizzes.php"><i class="fa-solid fa-circle-question"></i> Quizzes</a>
-        <a href="learner_assignments.php"><i class="fa-solid fa-file-pen"></i> Assignments</a>
-        <a href="learner_grades.php"><i class="fa-solid fa-star"></i> Grades</a>
       </nav>
       <div class="sidebar-footer">
         <p class="mb-1">Logged in as</p>
@@ -229,6 +226,6 @@ $learnerInitials = strtoupper(substr($learnerName, 0, 1));
 
   <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-  <script src="js/app.js?v=20260629-mail-check-release"></script>
+  <script src="js/app.js?v=20260713-learner-sidebar-teacher-email"></script>
 </body>
 </html>

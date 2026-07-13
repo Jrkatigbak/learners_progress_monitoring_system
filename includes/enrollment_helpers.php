@@ -57,9 +57,15 @@ function kiwiEnrollmentName(array $request): string
     return trim((string) $request['first_name'] . ' ' . (string) ($request['middle_name'] ?? '') . ' ' . (string) $request['last_name']);
 }
 
+function kiwiLmsClassEmailSubject(string $className, string $purpose): string
+{
+    // Keep class emails easy to scan in inboxes by starting with LMS, class, then message purpose.
+    return 'KIWI LMS | ' . trim($className) . ' | ' . trim($purpose);
+}
+
 function kiwiSendEnrollmentReceivedEmail(SmtpMailer $mailer, string $email, string $name, string $className): bool
 {
-    $subject = 'Class registration received';
+    $subject = kiwiLmsClassEmailSubject($className, 'Class Registration Received');
     $textBody = "Hello {$name},\n\n"
         . "Your registration for {$className} has been received.\n\n"
         . "Please wait for the administrator to approve your enrollment.\n\n"
@@ -75,7 +81,7 @@ function kiwiSendEnrollmentReceivedEmail(SmtpMailer $mailer, string $email, stri
 function kiwiSendEnrollmentApprovedEmail(SmtpMailer $mailer, string $email, string $name, string $className, string $password): bool
 {
     $loginUrl = kiwiLoginUrl();
-    $subject = 'Class enrollment approved';
+    $subject = kiwiLmsClassEmailSubject($className, 'Class Enrollment Approved');
     $textBody = "Hello {$name},\n\n"
         . "Your enrollment for {$className} has been approved.\n\n"
         . "Login link: {$loginUrl}\n"
@@ -96,7 +102,7 @@ function kiwiSendEnrollmentApprovedEmail(SmtpMailer $mailer, string $email, stri
 
 function kiwiSendEnrollmentDisapprovedEmail(SmtpMailer $mailer, string $email, string $name, string $className): bool
 {
-    $subject = 'Class enrollment update';
+    $subject = kiwiLmsClassEmailSubject($className, 'Class Enrollment Update');
     $textBody = "Hello {$name},\n\n"
         . "Your registration for {$className} was reviewed but was not approved at this time.\n\n"
         . "Kiwi Digital Tech";

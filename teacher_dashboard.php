@@ -97,7 +97,7 @@ $initials = strtoupper(substr($teacherName, 0, 1));
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=20260629-mail-check-release" rel="stylesheet">
+  <link href="css/style.css?v=20260713-learner-sidebar-teacher-email" rel="stylesheet">
 </head>
 <body class="dashboard-page">
   <div class="app-layout">
@@ -111,7 +111,6 @@ $initials = strtoupper(substr($teacherName, 0, 1));
       </a>
       <nav class="sidebar-nav">
         <a class="active" href="teacher_dashboard.php"><i class="fa-solid fa-gauge-high"></i> Dashboard</a>
-        <a href="grades.php"><i class="fa-solid fa-star"></i> Grades</a>
       </nav>
       <div class="sidebar-footer">
         <p class="mb-1">Logged in as</p>
@@ -327,6 +326,6 @@ $initials = strtoupper(substr($teacherName, 0, 1));
 
   <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-  <script src="js/app.js?v=20260629-mail-check-release"></script>
+  <script src="js/app.js?v=20260713-learner-sidebar-teacher-email"></script>
 </body>
 </html>

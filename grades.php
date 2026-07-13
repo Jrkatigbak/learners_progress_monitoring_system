@@ -340,7 +340,7 @@ $successMessages = [
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=20260629-mail-check-release" rel="stylesheet">
+  <link href="css/style.css?v=20260713-learner-sidebar-teacher-email" rel="stylesheet">
   <?php echo kiwiSystemThemeStyle(); ?>
 </head>
 <body class="dashboard-page">
@@ -356,7 +356,6 @@ $successMessages = [
         </a>
         <nav class="sidebar-nav">
           <a href="teacher_dashboard.php"><i class="fa-solid fa-gauge-high"></i> Dashboard</a>
-          <a class="active" href="grades.php"><i class="fa-solid fa-star"></i> Grades</a>
         </nav>
         <div class="sidebar-footer">
           <p class="mb-1">Logged in as</p>
@@ -704,6 +703,6 @@ $successMessages = [
       });
     </script>
   <?php endif; ?>
-  <script src="js/app.js?v=20260629-mail-check-release"></script>
+  <script src="js/app.js?v=20260713-learner-sidebar-teacher-email"></script>
 </body>
 </html>
