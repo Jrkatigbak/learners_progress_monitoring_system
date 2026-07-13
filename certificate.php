@@ -54,7 +54,12 @@ function certificateLearnerRows(PDO $pdo, int $classId, int $courseId, int $lear
 
 function certificateLearnerName(array $learner): string
 {
-    return trim((string) $learner['first_name'] . ' ' . (string) ($learner['middle_name'] ?? '') . ' ' . (string) $learner['last_name']);
+    $name = trim((string) $learner['first_name'] . ' ' . (string) ($learner['middle_name'] ?? '') . ' ' . (string) $learner['last_name']);
+    $name = strtolower(preg_replace('/\s+/', ' ', $name) ?? $name);
+
+    return preg_replace_callback('/\b([a-z])([a-z]*)\b/', static function (array $matches): string {
+        return strtoupper($matches[1]) . $matches[2];
+    }, $name) ?? $name;
 }
 
 function certificateFileName(string $name): string

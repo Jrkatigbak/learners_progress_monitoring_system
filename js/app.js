@@ -206,6 +206,26 @@ $(function () {
     }
   });
 
+  $(document).on('click', '.certificate-download-all-link', function () {
+    var $link = $(this);
+
+    $link.addClass('is-loading').attr('aria-busy', 'true');
+
+    if (window.Swal) {
+      Swal.fire({
+        title: 'Preparing certificates',
+        text: 'Generating all learner certificates into one ZIP file. Please wait...',
+        allowOutsideClick: false,
+        allowEscapeKey: false,
+        showConfirmButton: false,
+        timer: 2200,
+        didOpen: function () {
+          Swal.showLoading();
+        }
+      });
+    }
+  });
+
   var materialLinkIndex = 1;
   var selectedMaterialFiles = [];
 

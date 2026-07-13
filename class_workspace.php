@@ -3884,9 +3884,9 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
                 <span class="section-kicker">Certificates</span>
                 <h2 class="h5 mb-0">Generate learner certificates</h2>
               </div>
-              <?php if (kiwiClassCertificateReady($classCertificateColumns) && !empty($class['certificate_template_image'])): ?>
-                <a class="btn btn-sm btn-primary" href="certificate.php?class_id=<?php echo $classId; ?>&all=1">
-                  <i class="fa-solid fa-file-zipper me-2"></i>Download All
+              <?php if (kiwiClassCertificateReady($classCertificateColumns) && !empty($class['certificate_template_image']) && $learners): ?>
+                <a class="btn btn-sm btn-primary certificate-download-all-link" href="certificate.php?class_id=<?php echo $classId; ?>&all=1" download>
+                  <i class="fa-solid fa-file-zipper me-2"></i>Download All Certificates
                 </a>
               <?php endif; ?>
             </div>
@@ -3951,6 +3951,12 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
                       <p>No enrolled learners are available for certificate generation.</p>
                     </div>
                   <?php else: ?>
+                    <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+                      <span class="badge text-bg-primary"><?php echo count($learners); ?> certificate<?php echo count($learners) === 1 ? '' : 's'; ?></span>
+                      <a class="btn btn-sm btn-primary certificate-download-all-link" href="certificate.php?class_id=<?php echo $classId; ?>&all=1" download>
+                        <i class="fa-solid fa-file-zipper me-2"></i>Download All Certificates
+                      </a>
+                    </div>
                     <div class="certificate-learner-list">
                       <?php foreach ($learners as $learner): ?>
                         <?php $certificateLearnerName = trim($learner['first_name'] . ' ' . ($learner['middle_name'] ?? '') . ' ' . $learner['last_name']); ?>
@@ -4939,6 +4945,6 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
       }
     })();
   </script>
-  <script src="js/app.js?v=20260713-enrollment-loading"></script>
+  <script src="js/app.js?v=20260713-certificate-bulk-download"></script>
 </body>
 </html>
