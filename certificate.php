@@ -52,16 +52,6 @@ function certificateLearnerRows(PDO $pdo, int $classId, int $courseId, int $lear
     return $statement->fetchAll();
 }
 
-function certificateLearnerName(array $learner): string
-{
-    $name = trim((string) $learner['first_name'] . ' ' . (string) ($learner['middle_name'] ?? '') . ' ' . (string) $learner['last_name']);
-    $name = strtolower(preg_replace('/\s+/', ' ', $name) ?? $name);
-
-    return preg_replace_callback('/\b([a-z])([a-z]*)\b/', static function (array $matches): string {
-        return strtoupper($matches[1]) . $matches[2];
-    }, $name) ?? $name;
-}
-
 function certificateFileName(string $name): string
 {
     $slug = strtolower(trim(preg_replace('/[^a-zA-Z0-9]+/', '-', $name), '-'));
@@ -181,7 +171,7 @@ if ($downloadAll) {
     $zip->open($zipPath, ZipArchive::OVERWRITE);
 
     foreach ($learners as $learner) {
-        $name = certificateLearnerName($learner);
+        $name = kiwiCertificateLearnerName($learner);
         $image = kiwiRenderCertificateImage(
             $templatePath,
             $name,
@@ -198,6 +188,8 @@ if ($downloadAll) {
 
     $zip->close();
     header('Content-Type: application/zip');
+    header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+    header('Pragma: no-cache');
     header('Content-Disposition: attachment; filename="' . preg_replace('/[^a-zA-Z0-9-]+/', '-', (string) $class['class_name']) . '-certificates.zip"');
     header('Content-Length: ' . filesize($zipPath));
     readfile($zipPath);
@@ -206,7 +198,7 @@ if ($downloadAll) {
 }
 
 $learner = $learners[0];
-$learnerName = certificateLearnerName($learner);
+$learnerName = kiwiCertificateLearnerName($learner);
 $image = kiwiRenderCertificateImage(
     $templatePath,
     $learnerName,
@@ -224,6 +216,8 @@ if (!$image) {
 
 $png = kiwiOutputCertificatePng($image);
 header('Content-Type: image/png');
+header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+header('Pragma: no-cache');
 header('Content-Disposition: ' . ($forceDownload ? 'attachment' : 'inline') . '; filename="' . certificateFileName($learnerName) . '"');
 header('Content-Length: ' . strlen($png));
 echo $png;

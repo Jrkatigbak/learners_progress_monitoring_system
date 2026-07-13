@@ -84,6 +84,28 @@ function kiwiCertificateImageFromPath(string $path)
     return false;
 }
 
+function kiwiCertificateLearnerName(array $learner): string
+{
+    $name = trim((string) ($learner['first_name'] ?? '') . ' ' . (string) ($learner['middle_name'] ?? '') . ' ' . (string) ($learner['last_name'] ?? ''));
+    $name = preg_replace('/\s+/', ' ', $name) ?? $name;
+
+    if ($name === '') {
+        return 'Learner';
+    }
+
+    $lowerName = function_exists('mb_strtolower') ? mb_strtolower($name, 'UTF-8') : strtolower($name);
+
+    return preg_replace_callback('/\p{L}[\p{L}\p{Mn}\'-]*/u', static function (array $matches): string {
+        $word = $matches[0];
+
+        if (function_exists('mb_substr') && function_exists('mb_strtoupper')) {
+            return mb_strtoupper(mb_substr($word, 0, 1, 'UTF-8'), 'UTF-8') . mb_substr($word, 1, null, 'UTF-8');
+        }
+
+        return strtoupper(substr($word, 0, 1)) . substr($word, 1);
+    }, $lowerName) ?? $lowerName;
+}
+
 function kiwiRenderCertificateImage(string $templatePath, string $learnerName, float $nameX, float $nameY, int $fontSize, string $fontColor)
 {
     if (!extension_loaded('gd') || !is_file($templatePath)) {

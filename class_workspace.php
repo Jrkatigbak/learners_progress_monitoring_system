@@ -3959,7 +3959,7 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
                     </div>
                     <div class="certificate-learner-list">
                       <?php foreach ($learners as $learner): ?>
-                        <?php $certificateLearnerName = trim($learner['first_name'] . ' ' . ($learner['middle_name'] ?? '') . ' ' . $learner['last_name']); ?>
+                        <?php $certificateLearnerName = kiwiCertificateLearnerName($learner); ?>
                         <article class="certificate-learner-row">
                           <div>
                             <strong><?php echo e($certificateLearnerName); ?></strong>
