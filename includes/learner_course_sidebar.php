@@ -142,10 +142,10 @@ function kiwiLearnerCourseSidebarModules(array $context, int $learnerId): array
 
 function kiwiRenderLearnerCourseSidebar(?array $context, string $learnerName, string $activeModule = '', int $learnerId = 0): void
 {
+    $dashboardUrl = $context ? 'learner_course.php?course_id=' . (int) $context['course_id'] : 'learner_dashboard.php';
     ?>
       <nav class="sidebar-nav">
-        <a href="learner_dashboard.php"><i class="fa-solid fa-gauge-high"></i> Dashboard</a>
-        <a class="<?php echo $activeModule === 'enrolled' ? 'active' : ''; ?>" href="enrolled_courses.php"><i class="fa-solid fa-book-open-reader"></i> Enrolled Class</a>
+        <a class="<?php echo $activeModule === 'dashboard' ? 'active' : ''; ?>" href="<?php echo kiwiSidebarEscape($dashboardUrl); ?>"><i class="fa-solid fa-gauge-high"></i> Dashboard</a>
         <?php if ($context): ?>
           <?php foreach (kiwiLearnerCourseSidebarModules($context, $learnerId) as $module): ?>
             <a class="<?php echo $activeModule === $module['key'] ? 'active' : ''; ?>" href="<?php echo kiwiSidebarEscape((string) $module['url']); ?>">

@@ -24,7 +24,6 @@ $learnerStatement->execute(['email' => $currentUser['email']]);
 $learner = $learnerStatement->fetch() ?: null;
 
 $courseRows = [];
-$classmatesByCourse = [];
 
 if ($learner) {
     // Learners only receive courses that were approved by an admin.
@@ -47,34 +46,6 @@ if ($learner) {
     );
     $coursesStatement->execute(['learner_id' => (int) $learner['id']]);
     $courseRows = $coursesStatement->fetchAll();
-
-    if ($courseRows) {
-        $courseIds = array_map(static fn (array $course): int => (int) $course['id'], $courseRows);
-        $placeholders = implode(',', array_fill(0, count($courseIds), '?'));
-
-        // Classmates come from the same courses as the logged-in learner.
-        $classmatesStatement = $pdo->prepare(
-            "SELECT course_enrollments.course_id,
-                    learners.id,
-                    learners.learner_number,
-                    learners.first_name,
-                    learners.last_name,
-                    learners.email,
-                    learners.profile_photo
-             FROM course_enrollments
-             INNER JOIN learners ON learners.id = course_enrollments.learner_id AND learners.deleted_at IS NULL
-             WHERE course_enrollments.course_id IN ({$placeholders})
-               AND learners.id <> ?
-               AND course_enrollments.enrollment_status IN ('Enrolled', 'In Progress', 'Completed')
-               AND course_enrollments.deleted_at IS NULL
-             ORDER BY learners.first_name, learners.last_name"
-        );
-        $classmatesStatement->execute([...$courseIds, (int) $learner['id']]);
-
-        foreach ($classmatesStatement->fetchAll() as $classmate) {
-            $classmatesByCourse[(int) $classmate['course_id']][] = $classmate;
-        }
-    }
 }
 
 $learnerName = $learner ? trim($learner['first_name'] . ' ' . $learner['last_name']) : $currentUser['name'];
@@ -93,7 +64,7 @@ $learnerInitials = strtoupper(substr($learnerName, 0, 1));
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=20260713-learner-profile" rel="stylesheet">
+  <link href="css/style.css?v=20260713-learner-dashboard-nav" rel="stylesheet">
 </head>
 <body class="dashboard-page">
   <div class="app-layout">
@@ -108,7 +79,6 @@ $learnerInitials = strtoupper(substr($learnerName, 0, 1));
       </a>
       <nav class="sidebar-nav">
         <a class="active" href="learner_dashboard.php"><i class="fa-solid fa-gauge-high"></i> Dashboard</a>
-        <a href="enrolled_courses.php"><i class="fa-solid fa-book-open-reader"></i> Enrolled Class</a>
       </nav>
       <div class="sidebar-footer">
         <p class="mb-1">Logged in as</p>
@@ -155,7 +125,7 @@ $learnerInitials = strtoupper(substr($learnerName, 0, 1));
           <div>
             <span class="section-kicker">Learner Portal</span>
             <h2><?php echo e($learnerName); ?></h2>
-            <p>View your approved classes and classmates.</p>
+            <p>Open your approved classes and course modules.</p>
           </div>
           <a href="available_courses.php" class="btn btn-outline-light"><i class="fa-solid fa-book-open me-2"></i>Available Class</a>
         </div>
@@ -175,9 +145,8 @@ $learnerInitials = strtoupper(substr($learnerName, 0, 1));
             <?php foreach ($courseRows as $course): ?>
               <?php
                 $courseId = (int) $course['id'];
-                $classmates = $classmatesByCourse[$courseId] ?? [];
               ?>
-              <article class="course-card">
+              <a class="course-card course-card-link" href="learner_course.php?course_id=<?php echo $courseId; ?>" aria-label="Open <?php echo e($course['course_name']); ?>">
                 <div class="course-wallpaper">
                   <?php if (!empty($course['banner_image'])): ?>
                     <img src="<?php echo e($course['banner_image']); ?>" alt="<?php echo e($course['course_name']); ?> wallpaper">
@@ -198,32 +167,10 @@ $learnerInitials = strtoupper(substr($learnerName, 0, 1));
                   <?php endif; ?>
                   <div class="course-meta">
                     <span><i class="fa-regular fa-calendar"></i><?php echo e(date('M d, Y', strtotime($course['enrolled_at']))); ?></span>
-                    <span><i class="fa-solid fa-users"></i><?php echo count($classmates); ?> classmates</span>
                   </div>
-                  <div class="classmate-list">
-                    <h3>Classmates</h3>
-                    <div class="classmate-grid">
-                      <?php foreach ($classmates as $classmate): ?>
-                        <?php
-                          $classmateName = trim($classmate['first_name'] . ' ' . $classmate['last_name']);
-                          $classmateInitials = strtoupper(substr($classmate['first_name'], 0, 1) . substr($classmate['last_name'], 0, 1));
-                        ?>
-                        <div class="classmate-chip">
-                          <?php if (!empty($classmate['profile_photo'])): ?>
-                            <img src="<?php echo e($classmate['profile_photo']); ?>" alt="<?php echo e($classmateName); ?>">
-                          <?php else: ?>
-                            <span><?php echo e($classmateInitials); ?></span>
-                          <?php endif; ?>
-                          <div>
-                            <strong><?php echo e($classmateName); ?></strong>
-                            <small><?php echo e($classmate['learner_number']); ?></small>
-                          </div>
-                        </div>
-                      <?php endforeach; ?>
-                    </div>
-                  </div>
+                  <span class="course-open-cue"><i class="fa-solid fa-arrow-right"></i>Open Course</span>
                 </div>
-              </article>
+              </a>
             <?php endforeach; ?>
           </div>
         <?php endif; ?>
@@ -233,6 +180,6 @@ $learnerInitials = strtoupper(substr($learnerName, 0, 1));
 
   <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-  <script src="js/app.js?v=20260713-learner-profile"></script>
+  <script src="js/app.js?v=20260713-learner-dashboard-nav"></script>
 </body>
 </html>

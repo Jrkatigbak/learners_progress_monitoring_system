@@ -234,7 +234,7 @@ $moduleCards = [
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=20260713-course-sidebar" rel="stylesheet">
+  <link href="css/style.css?v=20260713-learner-dashboard-nav" rel="stylesheet">
 </head>
 <body class="dashboard-page">
   <div class="app-layout">
@@ -247,8 +247,7 @@ $moduleCards = [
         </span>
       </a>
       <nav class="sidebar-nav">
-        <a href="learner_dashboard.php"><i class="fa-solid fa-gauge-high"></i> Dashboard</a>
-        <a class="active" href="enrolled_courses.php"><i class="fa-solid fa-book-open-reader"></i> Enrolled Class</a>
+        <a class="active" href="learner_course.php?course_id=<?php echo $courseId; ?>"><i class="fa-solid fa-gauge-high"></i> Dashboard</a>
         <?php foreach ($moduleCards as $module): ?>
           <a href="<?php echo e($module['url']); ?>">
             <i class="fa-solid <?php echo e($module['icon']); ?>"></i>
@@ -561,6 +560,6 @@ $moduleCards = [
 
   <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-  <script src="js/app.js?v=20260713-course-sidebar"></script>
+  <script src="js/app.js?v=20260713-learner-dashboard-nav"></script>
 </body>
 </html>

@@ -150,7 +150,7 @@ if ($learner) {
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=20260713-course-sidebar" rel="stylesheet">
+  <link href="css/style.css?v=20260713-learner-dashboard-nav" rel="stylesheet">
 </head>
 <body class="dashboard-page">
   <div class="app-layout">
@@ -205,7 +205,7 @@ if ($learner) {
             <h2><?php echo e($learnerName); ?></h2>
             <p>Review your grades by topic and grade item.</p>
           </div>
-          <a href="enrolled_courses.php" class="btn btn-outline-light"><i class="fa-solid fa-book-open-reader me-2"></i>Enrolled Class</a>
+          <a href="learner_dashboard.php" class="btn btn-outline-light"><i class="fa-solid fa-gauge-high me-2"></i>Dashboard</a>
         </div>
 
         <?php if (!$learner): ?>
@@ -311,6 +311,6 @@ if ($learner) {
 
   <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-  <script src="js/app.js?v=20260713-course-sidebar"></script>
+  <script src="js/app.js?v=20260713-learner-dashboard-nav"></script>
 </body>
 </html>
