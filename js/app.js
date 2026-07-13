@@ -206,6 +206,35 @@ $(function () {
     }
   });
 
+  $(document).on('submit', '.evaluation-form-card', function () {
+    var $form = $(this);
+    var $button = $form.find('button[type="submit"]').first();
+
+    if ($button.prop('disabled')) {
+      return false;
+    }
+
+    $button
+      .prop('disabled', true)
+      .addClass('is-loading')
+      .html('<span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>Sending evaluation...');
+
+    $form.find('button[type="submit"]').not($button).prop('disabled', true);
+
+    if (window.Swal) {
+      Swal.fire({
+        title: 'Sending evaluation',
+        text: 'Saving your evaluation response. Please wait...',
+        allowOutsideClick: false,
+        allowEscapeKey: false,
+        showConfirmButton: false,
+        didOpen: function () {
+          Swal.showLoading();
+        }
+      });
+    }
+  });
+
   $(document).on('click', '.certificate-download-all-link', function () {
     var $link = $(this);
 
