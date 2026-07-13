@@ -28,6 +28,11 @@ function kiwiLearnerCourseContext(PDO $pdo, int $learnerId, int $courseId = 0, i
         return null;
     }
 
+    $certificateColumns = kiwiClassCertificateColumns($pdo);
+    $certificateDownloadSelect = !empty($certificateColumns['certificate_download_enabled'])
+        ? ', classes.certificate_download_enabled'
+        : ', 1 AS certificate_download_enabled';
+
     $statement = $pdo->prepare(
         "SELECT courses.id AS course_id,
                 courses.course_name,
@@ -38,6 +43,7 @@ function kiwiLearnerCourseContext(PDO $pdo, int $learnerId, int $courseId = 0, i
                 classes.certificate_name_y,
                 classes.certificate_font_size,
                 classes.certificate_font_color
+                {$certificateDownloadSelect}
          FROM courses
          INNER JOIN classes
            ON courses.course_code = CONCAT('CLASS-', classes.id)
@@ -77,7 +83,8 @@ function kiwiLearnerCourseContext(PDO $pdo, int $learnerId, int $courseId = 0, i
     };
 
     $evaluationReady = kiwiClassEvaluationColumnsReady(kiwiClassEvaluationColumns($pdo)) && kiwiClassEvaluationsTableReady($pdo);
-    $certificateReady = kiwiClassCertificateReady(kiwiClassCertificateColumns($pdo)) && !empty($context['certificate_template_image']);
+    $certificateReady = kiwiClassCertificateReady($certificateColumns) && !empty($context['certificate_template_image']);
+    $certificateDownloadsEnabled = $certificateReady && kiwiCertificateDownloadsEnabled($context, $certificateColumns);
 
     return [
         'course_id' => $resolvedCourseId,
@@ -117,9 +124,9 @@ function kiwiLearnerCourseContext(PDO $pdo, int $learnerId, int $courseId = 0, i
                AND course_enrollments.deleted_at IS NULL',
             ['course_id' => $resolvedCourseId]
         ) - 1),
-        'certificate_count' => $certificateReady ? 1 : 0,
+        'certificate_count' => $certificateDownloadsEnabled ? 1 : 0,
         'evaluation_ready' => $evaluationReady,
-        'certificate_ready' => $certificateReady,
+        'certificate_ready' => $certificateDownloadsEnabled,
     ];
 }
 

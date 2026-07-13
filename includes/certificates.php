@@ -14,6 +14,7 @@ function kiwiClassCertificateColumns(PDO $pdo): array
         'certificate_name_y' => isset($columns['certificate_name_y']),
         'certificate_font_size' => isset($columns['certificate_font_size']),
         'certificate_font_color' => isset($columns['certificate_font_color']),
+        'certificate_download_enabled' => isset($columns['certificate_download_enabled']),
     ];
 }
 
@@ -26,6 +27,15 @@ function kiwiClassCertificateReady(array $columns): bool
     }
 
     return true;
+}
+
+function kiwiCertificateDownloadsEnabled(array $class, array $columns): bool
+{
+    if (empty($columns['certificate_download_enabled'])) {
+        return true;
+    }
+
+    return (int) ($class['certificate_download_enabled'] ?? 1) === 1;
 }
 
 function kiwiCertificateFontPath(): string

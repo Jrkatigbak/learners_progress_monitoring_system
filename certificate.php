@@ -112,6 +112,12 @@ if ($isAdminSideUser) {
         exit;
     }
 } elseif ($auth->isLearner()) {
+    if (!kiwiCertificateDownloadsEnabled($class, $classColumns)) {
+        http_response_code(403);
+        echo 'Certificate downloads are currently disabled for this class.';
+        exit;
+    }
+
     $learnerStatement = $pdo->prepare(
         'SELECT learners.id
          FROM learners

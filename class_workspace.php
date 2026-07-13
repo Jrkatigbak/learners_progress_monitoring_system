@@ -2397,6 +2397,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $nameY = (float) ($_POST['certificate_name_y'] ?? 56);
         $fontSize = (int) ($_POST['certificate_font_size'] ?? 56);
         $fontColor = trim((string) ($_POST['certificate_font_color'] ?? '#1f1a17'));
+        $downloadsEnabled = isset($_POST['certificate_download_enabled']) ? 1 : 0;
         $templateImage = (string) ($class['certificate_template_image'] ?? '');
 
         if (!kiwiClassCertificateReady($classCertificateColumns)) {
@@ -2458,23 +2459,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         if (!$errors) {
-            $updateCertificate = $pdo->prepare(
-                'UPDATE classes
-                 SET certificate_template_image = :certificate_template_image,
+            $certificateSetSql = 'certificate_template_image = :certificate_template_image,
                      certificate_name_x = :certificate_name_x,
                      certificate_name_y = :certificate_name_y,
                      certificate_font_size = :certificate_font_size,
-                     certificate_font_color = :certificate_font_color
-                 WHERE id = :id'
-            );
-            $updateCertificate->execute([
+                     certificate_font_color = :certificate_font_color';
+            $certificateParams = [
                 'certificate_template_image' => $templateImage,
                 'certificate_name_x' => $nameX,
                 'certificate_name_y' => $nameY,
                 'certificate_font_size' => $fontSize,
                 'certificate_font_color' => $fontColor,
                 'id' => $classId,
-            ]);
+            ];
+
+            if (!empty($classCertificateColumns['certificate_download_enabled'])) {
+                $certificateSetSql .= ',
+                     certificate_download_enabled = :certificate_download_enabled';
+                $certificateParams['certificate_download_enabled'] = $downloadsEnabled;
+            }
+
+            $updateCertificate = $pdo->prepare(
+                'UPDATE classes
+                 SET ' . $certificateSetSql . '
+                 WHERE id = :id'
+            );
+            $updateCertificate->execute($certificateParams);
 
             header('Location: class_workspace.php?class_id=' . $classId . '&tool=certificates&success=certificate_saved');
             exit;
@@ -2890,7 +2900,7 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=20260713-certificate-preview" rel="stylesheet">
+  <link href="css/style.css?v=20260713-certificate-access" rel="stylesheet">
   <?php echo kiwiSystemThemeStyle(); ?>
 </head>
 <body class="dashboard-page class-workspace-page class-workspace-<?php echo e($tool); ?>">
@@ -3896,6 +3906,7 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
                 Certificate fields are not installed yet. Add the certificate columns to the <strong>classes</strong> table, then reload this page.
               </div>
             <?php else: ?>
+              <?php $certificateDownloadsEnabled = kiwiCertificateDownloadsEnabled($class, $classCertificateColumns); ?>
               <div class="row g-4">
                 <div class="col-lg-5">
                   <form method="post" enctype="multipart/form-data" class="module-form certificate-template-form">
@@ -3933,6 +3944,16 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
                     <div class="certificate-name-font-sample" style="color: <?php echo e((string) ($class['certificate_font_color'] ?? '#1f1a17')); ?>;">
                       Jenayson B. Tadeja
                     </div>
+                    <?php if (!empty($classCertificateColumns['certificate_download_enabled'])): ?>
+                      <div class="form-check form-switch mt-3">
+                        <input class="form-check-input" type="checkbox" role="switch" id="certificate_download_enabled" name="certificate_download_enabled" value="1" <?php echo $certificateDownloadsEnabled ? 'checked' : ''; ?>>
+                        <label class="form-check-label" for="certificate_download_enabled">Allow learners to view and download certificates</label>
+                      </div>
+                    <?php else: ?>
+                      <div class="alert alert-warning mt-3 mb-0" role="alert">
+                        Add the <strong>certificate_download_enabled</strong> column to enable learner download control.
+                      </div>
+                    <?php endif; ?>
                     <div class="form-text mt-3">X/Y are percentage positions on the template. Start with X 50 and adjust Y until the name sits on the blank line.</div>
                     <button type="submit" class="btn btn-primary mt-3" <?php echo !($canManageCertificatesAdd || $canManageCertificatesEdit) ? 'disabled' : ''; ?>>
                       <i class="fa-solid fa-floppy-disk me-2"></i>Save Template
@@ -3952,7 +3973,12 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
                     </div>
                   <?php else: ?>
                     <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
-                      <span class="badge text-bg-primary"><?php echo count($learners); ?> certificate<?php echo count($learners) === 1 ? '' : 's'; ?></span>
+                      <div class="d-flex flex-wrap align-items-center gap-2">
+                        <span class="badge text-bg-primary"><?php echo count($learners); ?> certificate<?php echo count($learners) === 1 ? '' : 's'; ?></span>
+                        <span class="badge <?php echo $certificateDownloadsEnabled ? 'text-bg-success' : 'text-bg-warning'; ?>">
+                          Learner downloads <?php echo $certificateDownloadsEnabled ? 'enabled' : 'disabled'; ?>
+                        </span>
+                      </div>
                       <a class="btn btn-sm btn-primary certificate-download-all-link" href="certificate.php?class_id=<?php echo $classId; ?>&all=1" download>
                         <i class="fa-solid fa-file-zipper me-2"></i>Download All Certificates
                       </a>
@@ -4964,6 +4990,6 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
       }
     })();
   </script>
-  <script src="js/app.js?v=20260713-certificate-preview"></script>
+  <script src="js/app.js?v=20260713-certificate-access"></script>
 </body>
 </html>

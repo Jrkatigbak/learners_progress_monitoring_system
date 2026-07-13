@@ -48,7 +48,8 @@ if ($learner && $courseId > 0) {
                 NULL AS seminar_venue';
     $certificateSelect = kiwiClassCertificateReady($certificateColumns)
         ? ', classes.certificate_template_image'
-        : ', NULL AS certificate_template_image';
+            . (!empty($certificateColumns['certificate_download_enabled']) ? ', classes.certificate_download_enabled' : ', 1 AS certificate_download_enabled')
+        : ', NULL AS certificate_template_image, 1 AS certificate_download_enabled';
     $courseStatement = $pdo->prepare(
         "SELECT courses.id,
                 courses.course_code,
@@ -87,6 +88,7 @@ $classId = (int) ($course['class_id'] ?? 0);
 $learnerName = trim($learner['first_name'] . ' ' . $learner['last_name']);
 $learnerInitials = strtoupper(substr($learnerName, 0, 1));
 $certificateReady = $classId > 0 && kiwiClassCertificateReady($certificateColumns) && !empty($course['certificate_template_image']);
+$certificateDownloadsEnabled = $certificateReady && kiwiCertificateDownloadsEnabled($course, $certificateColumns);
 $classmates = [];
 $topics = [];
 $materials = [];
@@ -219,7 +221,7 @@ $moduleCards = [
     ['label' => 'Grades', 'icon' => 'fa-star', 'count' => count($gradeItems), 'url' => 'learner_grades.php?course_id=' . $courseId],
     ['label' => 'Evaluation', 'icon' => 'fa-clipboard-check', 'count' => $evaluationSubmitted ? 1 : 0, 'url' => $evaluationReady ? 'learner_evaluation.php?course_id=' . $courseId : '#evaluation'],
     ['label' => 'Classmates', 'icon' => 'fa-users', 'count' => count($classmates), 'url' => '#classmates'],
-    ['label' => 'Certificates', 'icon' => 'fa-award', 'count' => $certificateReady ? 1 : 0, 'url' => $certificateReady ? 'certificate.php?class_id=' . $classId . '&learner_id=' . (int) $learner['id'] : '#certificates'],
+    ['label' => 'Certificates', 'icon' => 'fa-award', 'count' => $certificateDownloadsEnabled ? 1 : 0, 'url' => $certificateDownloadsEnabled ? 'certificate.php?class_id=' . $classId . '&learner_id=' . (int) $learner['id'] : '#certificates'],
 ];
 ?>
 <!doctype html>
@@ -235,7 +237,7 @@ $moduleCards = [
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=20260713-learner-classmates" rel="stylesheet">
+  <link href="css/style.css?v=20260713-certificate-access" rel="stylesheet">
 </head>
 <body class="dashboard-page">
   <div class="app-layout">
@@ -541,6 +543,8 @@ $moduleCards = [
           </div>
           <?php if (!$certificateReady): ?>
             <div class="empty-state compact"><i class="fa-solid fa-award"></i><p>No certificate is available yet.</p></div>
+          <?php elseif (!$certificateDownloadsEnabled): ?>
+            <div class="empty-state compact"><i class="fa-solid fa-lock"></i><p>Certificate viewing and downloads are currently disabled for this class.</p></div>
           <?php else: ?>
             <div class="learner-course-list">
               <article class="learner-course-list-item">
@@ -563,6 +567,6 @@ $moduleCards = [
 
   <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-  <script src="js/app.js?v=20260713-learner-classmates"></script>
+  <script src="js/app.js?v=20260713-certificate-access"></script>
 </body>
 </html>
