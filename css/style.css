@@ -3379,6 +3379,14 @@ body {
   gap: 14px;
 }
 
+.evaluation-response-panel {
+  min-height: 100%;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--surface);
+}
+
 .evaluation-response-card {
   padding: 18px;
   border: 1px solid var(--line);
@@ -3455,6 +3463,47 @@ body {
   border-radius: 22px;
   background: var(--surface);
   box-shadow: 0 16px 42px var(--shadow);
+}
+
+.required-field-label::after {
+  content: " *";
+  color: var(--danger);
+  font-weight: 900;
+}
+
+.evaluation-form-card .is-required-missing {
+  border-color: rgba(220, 53, 69, 0.72);
+}
+
+.evaluation-form-card .form-control.is-required-missing,
+.evaluation-form-card input.is-required-missing {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 0.18rem rgba(220, 53, 69, 0.13);
+}
+
+.evaluation-section.is-required-missing {
+  outline: 2px solid rgba(220, 53, 69, 0.28);
+  outline-offset: 5px;
+  border-radius: 16px;
+}
+
+.evaluation-rating-row.is-required-missing,
+.form-check.is-required-missing {
+  border-color: rgba(220, 53, 69, 0.72);
+  background: rgba(220, 53, 69, 0.06);
+}
+
+.evaluation-rating-row.is-required-missing label,
+.form-check.is-required-missing label {
+  color: var(--danger);
+  font-weight: 800;
+}
+
+.required-field-message {
+  margin: -0.35rem 0 1rem;
+  color: var(--danger);
+  font-size: 0.85rem;
+  font-weight: 800;
 }
 
 .evaluation-form-head {

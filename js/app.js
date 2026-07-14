@@ -210,6 +210,10 @@ $(function () {
     var $form = $(this);
     var $button = $form.find('button[type="submit"]').first();
     var missingGroup = '';
+    var $firstInvalidField = $();
+
+    $form.find('.is-required-missing').removeClass('is-required-missing');
+    $form.find('.required-field-message').remove();
 
     $form.find('input[type="radio"][required]').each(function () {
       var groupName = $(this).attr('name');
@@ -227,8 +231,12 @@ $(function () {
       event.preventDefault();
 
       var $firstMissing = $form.find('input[name="' + missingGroup + '"]').first();
+      var $missingRow = $firstMissing.closest('.evaluation-rating-row, .form-check').first();
       var $section = $firstMissing.closest('.evaluation-section');
       var sectionTitle = $.trim($section.find('h3').first().text()) || 'Evaluation item';
+
+      $missingRow.addClass('is-required-missing');
+      $section.addClass('is-required-missing');
 
       if (window.Swal) {
         Swal.fire({
@@ -245,6 +253,44 @@ $(function () {
         $('html, body').animate({ scrollTop: Math.max(0, $firstMissing.offset().top - 140) }, 250);
         $firstMissing.trigger('focus');
       }
+
+      return false;
+    }
+
+    $form.find('textarea[required], input[required]:not([type="radio"])').each(function () {
+      var $field = $(this);
+      var value = $.trim($field.val() || '');
+
+      if ($firstInvalidField.length || value !== '') {
+        return;
+      }
+
+      $firstInvalidField = $field;
+    });
+
+    if ($firstInvalidField.length) {
+      event.preventDefault();
+
+      var $fieldWrap = $firstInvalidField.closest('.evaluation-section, .col-md-6').first();
+      var fieldLabel = $.trim($('label[for="' + $firstInvalidField.attr('id') + '"]').first().text()) || 'Required field';
+
+      $firstInvalidField.addClass('is-required-missing');
+      $fieldWrap.addClass('is-required-missing');
+      $firstInvalidField.after('<div class="required-field-message">This field is required.</div>');
+
+      if (window.Swal) {
+        Swal.fire({
+          icon: 'warning',
+          title: 'Required field missing',
+          text: 'Please fill in: ' + fieldLabel.replace('*', '').trim(),
+          confirmButtonColor: '#f58220'
+        });
+      } else {
+        window.alert('Please fill in: ' + fieldLabel.replace('*', '').trim());
+      }
+
+      $('html, body').animate({ scrollTop: Math.max(0, $firstInvalidField.offset().top - 140) }, 250);
+      $firstInvalidField.trigger('focus');
 
       return false;
     }
@@ -277,6 +323,23 @@ $(function () {
           Swal.showLoading();
         }
       });
+    }
+  });
+
+  $(document).on('change input', '.evaluation-form-card input, .evaluation-form-card textarea', function () {
+    var $field = $(this);
+    var fieldName = $field.attr('name');
+
+    $field.removeClass('is-required-missing');
+    $field.siblings('.required-field-message').remove();
+    $field.closest('.evaluation-section, .evaluation-rating-row, .form-check, .col-md-6').removeClass('is-required-missing');
+
+    if ($field.is(':radio') && fieldName) {
+      $field
+        .closest('.evaluation-section')
+        .find('input[name="' + fieldName + '"]')
+        .closest('.evaluation-rating-row, .form-check')
+        .removeClass('is-required-missing');
     }
   });
 

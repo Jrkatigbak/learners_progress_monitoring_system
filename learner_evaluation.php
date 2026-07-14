@@ -92,7 +92,7 @@ if (!$evaluationColumnsReady || !$evaluationTableReady || !$evaluationEnabled) {
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=20260714-evaluation-submit" rel="stylesheet">
+  <link href="css/style.css?v=20260714-evaluation-required" rel="stylesheet">
 </head>
 <body class="dashboard-page">
   <div class="app-layout">
@@ -171,6 +171,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if ($attendeeEmail !== '' && !filter_var($attendeeEmail, FILTER_VALIDATE_EMAIL)) {
         $errors[] = 'Enter a valid optional attendee email.';
+    }
+
+    if ($feedbackUseful === '' || $feedbackImprovements === '' || $feedbackTopics === '') {
+        $errors[] = 'Complete all open-ended feedback fields.';
     }
 
     if (!$errors) {
@@ -257,7 +261,7 @@ function postedOrExisting(string $field, ?array $existingEvaluation, string $fal
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=20260714-evaluation-submit" rel="stylesheet">
+  <link href="css/style.css?v=20260714-evaluation-required" rel="stylesheet">
 </head>
 <body class="dashboard-page">
   <div class="app-layout">
@@ -311,7 +315,7 @@ function postedOrExisting(string $field, ?array $existingEvaluation, string $fal
         </a>
 
         <?php if ($success === 'saved'): ?>
-          <div class="alert alert-success" role="alert">Evaluation submitted successfully.</div>
+          <div class="alert alert-success" role="alert">Evaluation saved successfully. You can review and update your response anytime.</div>
         <?php endif; ?>
 
         <?php if ($errors): ?>
@@ -328,6 +332,11 @@ function postedOrExisting(string $field, ?array $existingEvaluation, string $fal
             <p>The evaluation form is not ready yet.</p>
           </div>
         <?php else: ?>
+          <?php if ($existingEvaluation): ?>
+            <div class="alert alert-info" role="alert">
+              You already submitted this evaluation. Review your answers below and click <strong>Update Evaluation</strong> to save changes.
+            </div>
+          <?php endif; ?>
           <form method="post" class="evaluation-form-card" novalidate>
             <input type="hidden" name="course_id" value="<?php echo $courseId; ?>">
             <div class="evaluation-form-head">
@@ -395,12 +404,12 @@ function postedOrExisting(string $field, ?array $existingEvaluation, string $fal
 
             <section class="evaluation-section">
               <h3>5. Open-Ended Feedback</h3>
-              <label class="form-label" for="feedback_useful">What did you find most useful or valuable?</label>
-              <textarea class="form-control mb-3" id="feedback_useful" name="feedback_useful" rows="2"><?php echo e(postedOrExisting('feedback_useful', $existingEvaluation)); ?></textarea>
-              <label class="form-label" for="feedback_improvements">What specific improvements could be made?</label>
-              <textarea class="form-control mb-3" id="feedback_improvements" name="feedback_improvements" rows="2"><?php echo e(postedOrExisting('feedback_improvements', $existingEvaluation)); ?></textarea>
-              <label class="form-label" for="feedback_topics">What related topics would you like covered in the future?</label>
-              <textarea class="form-control" id="feedback_topics" name="feedback_topics" rows="2"><?php echo e(postedOrExisting('feedback_topics', $existingEvaluation)); ?></textarea>
+              <label class="form-label required-field-label" for="feedback_useful">What did you find most useful or valuable?</label>
+              <textarea class="form-control mb-3" id="feedback_useful" name="feedback_useful" rows="2" required><?php echo e(postedOrExisting('feedback_useful', $existingEvaluation)); ?></textarea>
+              <label class="form-label required-field-label" for="feedback_improvements">What specific improvements could be made?</label>
+              <textarea class="form-control mb-3" id="feedback_improvements" name="feedback_improvements" rows="2" required><?php echo e(postedOrExisting('feedback_improvements', $existingEvaluation)); ?></textarea>
+              <label class="form-label required-field-label" for="feedback_topics">What related topics would you like covered in the future?</label>
+              <textarea class="form-control" id="feedback_topics" name="feedback_topics" rows="2" required><?php echo e(postedOrExisting('feedback_topics', $existingEvaluation)); ?></textarea>
             </section>
 
             <section class="evaluation-section">
@@ -418,7 +427,7 @@ function postedOrExisting(string $field, ?array $existingEvaluation, string $fal
             </section>
 
             <button type="submit" class="btn btn-primary">
-              <i class="fa-solid fa-paper-plane me-2"></i>Submit Evaluation
+              <i class="fa-solid fa-paper-plane me-2"></i><?php echo $existingEvaluation ? 'Update Evaluation' : 'Submit Evaluation'; ?>
             </button>
           </form>
         <?php endif; ?>
@@ -429,6 +438,6 @@ function postedOrExisting(string $field, ?array $existingEvaluation, string $fal
   <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
-  <script src="js/app.js?v=20260714-evaluation-submit"></script>
+  <script src="js/app.js?v=20260714-evaluation-required"></script>
 </body>
 </html>
