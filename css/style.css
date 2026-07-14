@@ -3379,12 +3379,70 @@ body {
   gap: 14px;
 }
 
+.evaluation-response-list.is-compact {
+  gap: 10px;
+}
+
 .evaluation-response-panel {
   min-height: 100%;
   padding: 18px;
   border: 1px solid var(--line);
   border-radius: 18px;
   background: var(--surface);
+}
+
+.evaluation-response-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 18px;
+  align-items: center;
+  width: 100%;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface-alt);
+  color: var(--ink);
+  text-align: left;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+}
+
+.evaluation-response-row:hover,
+.evaluation-response-row:focus-visible {
+  border-color: rgba(245, 130, 32, 0.55);
+  box-shadow: 0 14px 32px var(--shadow);
+  transform: translateY(-1px);
+}
+
+.evaluation-response-row strong,
+.evaluation-response-row small,
+.evaluation-score-pill small {
+  display: block;
+}
+
+.evaluation-response-row strong {
+  font-weight: 900;
+}
+
+.evaluation-response-row small {
+  margin-top: 3px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.evaluation-score-pill {
+  min-width: 96px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: rgba(25, 135, 84, 0.12);
+  color: var(--success);
+  font-weight: 900;
+  text-align: center;
+}
+
+.evaluation-score-pill small {
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 800;
 }
 
 .evaluation-response-card {

@@ -2944,7 +2944,7 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=20260714-evaluation-responses" rel="stylesheet">
+  <link href="css/style.css?v=20260714-evaluation-modal" rel="stylesheet">
   <?php echo kiwiSystemThemeStyle(); ?>
 </head>
 <body class="dashboard-page class-workspace-page class-workspace-<?php echo e($tool); ?>">
@@ -4068,6 +4068,9 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
                   </span>
                 <?php endif; ?>
                 <span class="badge text-bg-primary"><?php echo count($evaluationRows); ?> response<?php echo count($evaluationRows) === 1 ? '' : 's'; ?></span>
+                <button class="btn btn-outline-primary btn-sm" type="button" data-bs-toggle="modal" data-bs-target="#evaluationSettingsModal" <?php echo !$canManageEvaluationsEdit ? 'disabled' : ''; ?>>
+                  <i class="fa-solid fa-sliders me-2"></i>Evaluation Settings
+                </button>
               </div>
             </div>
 
@@ -4079,126 +4082,69 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
                 <?php endif; ?>
               </div>
             <?php else: ?>
-              <div class="row g-4">
-                <div class="col-xl-4">
-                  <form method="post" class="module-form evaluation-settings-card">
-                    <input type="hidden" name="action" value="save_evaluation_settings">
-                    <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
-                    <input type="hidden" name="tool" value="evaluations">
-                    <div class="mb-3">
-                      <label class="form-label" for="class_type">Class tag</label>
-                      <select class="form-select" id="class_type" name="class_type">
-                        <option value="Course" <?php echo ($class['class_type'] ?? 'Course') === 'Course' ? 'selected' : ''; ?>>Course</option>
-                        <option value="Seminar" <?php echo ($class['class_type'] ?? 'Course') === 'Seminar' ? 'selected' : ''; ?>>Seminar</option>
-                      </select>
-                    </div>
-                    <div class="mb-3">
-                      <label class="form-label" for="seminar_title">Seminar title / current title</label>
-                      <input type="text" class="form-control" id="seminar_title" name="seminar_title" value="<?php echo e((string) ($class['seminar_title'] ?? $class['class_name'])); ?>">
-                    </div>
-                    <div class="mb-3">
-                      <label class="form-label" for="seminar_presenter">Presenter / speaker / teacher</label>
-                      <input type="text" class="form-control" id="seminar_presenter" name="seminar_presenter" value="<?php echo e((string) ($class['seminar_presenter'] ?? $class['display_teacher'] ?? '')); ?>">
-                    </div>
-                    <div class="row g-3">
-                      <div class="col-sm-6">
-                        <label class="form-label" for="seminar_date">Date</label>
-                        <input type="date" class="form-control" id="seminar_date" name="seminar_date" value="<?php echo e((string) ($class['seminar_date'] ?? '')); ?>">
-                      </div>
-                      <div class="col-sm-6">
-                        <label class="form-label" for="seminar_venue">Venue / platform</label>
-                        <input type="text" class="form-control" id="seminar_venue" name="seminar_venue" value="<?php echo e((string) ($class['seminar_venue'] ?? '')); ?>">
-                      </div>
-                    </div>
-                    <?php if (!empty($classEvaluationColumns['evaluation_enabled'])): ?>
-                      <div class="form-check form-switch mt-3">
-                        <input class="form-check-input" type="checkbox" role="switch" id="evaluation_enabled" name="evaluation_enabled" value="1" <?php echo kiwiEvaluationEnabled($class, $classEvaluationColumns) ? 'checked' : ''; ?>>
-                        <label class="form-check-label" for="evaluation_enabled">Allow learners to answer the evaluation form</label>
-                      </div>
-                    <?php else: ?>
-                      <div class="alert alert-warning mt-3 mb-0" role="alert">
-                        Add the <strong>evaluation_enabled</strong> column to enable learner evaluation visibility control.
-                      </div>
-                    <?php endif; ?>
-                    <button type="submit" class="btn btn-primary mt-3" <?php echo !$canManageEvaluationsEdit ? 'disabled' : ''; ?>>
-                      <i class="fa-solid fa-floppy-disk me-2"></i>Save Evaluation Settings
-                    </button>
-                  </form>
-                </div>
-                <div class="col-xl-8">
-                  <div class="evaluation-response-panel">
-                    <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
-                      <div>
-                        <span class="section-kicker">Responses</span>
-                        <h3 class="h6 mb-0">Learner feedback</h3>
-                      </div>
-                      <span class="badge text-bg-primary"><?php echo count($evaluationRows); ?> saved</span>
-                    </div>
-                    <?php if (!$evaluationRows): ?>
-                      <div class="empty-state compact">
-                        <i class="fa-solid fa-clipboard-check"></i>
-                        <p>No saved evaluation responses yet.</p>
-                      </div>
-                    <?php else: ?>
-                      <div class="evaluation-response-list">
-                        <?php foreach ($evaluationRows as $response): ?>
-                          <?php
-                            $ratingTotal = 0;
-                            $ratingCount = 0;
-                            foreach (kiwiEvaluationRatingFieldNames() as $fieldName) {
-                                if (isset($response[$fieldName])) {
-                                    $ratingTotal += (int) $response[$fieldName];
-                                    $ratingCount++;
-                                }
-                            }
-                            $ratingAverage = $ratingCount > 0 ? round($ratingTotal / $ratingCount, 2) : 0;
-                            $responseLearnerName = trim((string) ($response['first_name'] ?? '') . ' ' . (string) ($response['last_name'] ?? ''));
-                          ?>
-                          <article class="evaluation-response-card">
-                            <div class="d-flex flex-wrap align-items-start justify-content-between gap-3">
-                              <div>
-                                <h3><?php echo e($responseLearnerName !== '' ? $responseLearnerName : (string) ($response['attendee_name'] ?? 'Learner')); ?></h3>
-                                <p class="mb-0 text-secondary"><?php echo e((string) ($response['learner_number'] ?? $response['attendee_email'] ?? '')); ?></p>
-                              </div>
-                              <span class="badge text-bg-success"><?php echo e(number_format($ratingAverage, 2)); ?> / 5</span>
-                            </div>
-                            <div class="evaluation-response-meta">
-                              <span>Overall: <?php echo e((string) $response['overall_rating']); ?></span>
-                              <span>Recommend: <?php echo e((string) $response['recommend']); ?></span>
-                              <span><?php echo e(date('M d, Y g:i A', strtotime((string) $response['created_at']))); ?></span>
-                            </div>
-                            <div class="evaluation-rating-report">
-                              <?php foreach (kiwiEvaluationRatingItems() as $section): ?>
-                                <div class="evaluation-rating-report-section">
-                                  <h4><?php echo e((string) $section['title']); ?></h4>
-                                  <?php foreach ($section['items'] as $fieldName => $label): ?>
-                                    <div class="evaluation-rating-report-row">
-                                      <span><?php echo e((string) $label); ?></span>
-                                      <strong><?php echo e((string) ($response[$fieldName] ?? 'N/A')); ?></strong>
-                                    </div>
-                                  <?php endforeach; ?>
-                                </div>
-                              <?php endforeach; ?>
-                            </div>
-                            <?php if (!empty($response['feedback_useful']) || !empty($response['feedback_improvements']) || !empty($response['feedback_topics'])): ?>
-                              <div class="evaluation-feedback">
-                                <?php if (!empty($response['feedback_useful'])): ?><p><strong>Useful:</strong> <?php echo e((string) $response['feedback_useful']); ?></p><?php endif; ?>
-                                <?php if (!empty($response['feedback_improvements'])): ?><p><strong>Improvements:</strong> <?php echo e((string) $response['feedback_improvements']); ?></p><?php endif; ?>
-                                <?php if (!empty($response['feedback_topics'])): ?><p><strong>Future topics:</strong> <?php echo e((string) $response['feedback_topics']); ?></p><?php endif; ?>
-                              </div>
-                            <?php endif; ?>
-                            <?php if (!empty($response['attendee_name']) || !empty($response['attendee_email'])): ?>
-                              <div class="evaluation-feedback">
-                                <?php if (!empty($response['attendee_name'])): ?><p><strong>Attendee name:</strong> <?php echo e((string) $response['attendee_name']); ?></p><?php endif; ?>
-                                <?php if (!empty($response['attendee_email'])): ?><p><strong>Attendee email:</strong> <?php echo e((string) $response['attendee_email']); ?></p><?php endif; ?>
-                              </div>
-                            <?php endif; ?>
-                          </article>
-                        <?php endforeach; ?>
-                      </div>
-                    <?php endif; ?>
+              <?php
+                $evaluationOverallTotal = 0;
+                $evaluationOverallCount = 0;
+                foreach ($evaluationRows as $response) {
+                    foreach (kiwiEvaluationRatingFieldNames() as $fieldName) {
+                        if (isset($response[$fieldName])) {
+                            $evaluationOverallTotal += (int) $response[$fieldName];
+                            $evaluationOverallCount++;
+                        }
+                    }
+                }
+                $evaluationOverallAverage = $evaluationOverallCount > 0 ? $evaluationOverallTotal / $evaluationOverallCount : 0;
+                $evaluationOverallPercent = $evaluationOverallAverage > 0 ? round(($evaluationOverallAverage / 5) * 100, 1) : 0;
+              ?>
+              <div class="evaluation-response-panel">
+                <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+                  <div>
+                    <span class="section-kicker">Responses</span>
+                    <h3 class="h6 mb-0">Learner feedback</h3>
+                  </div>
+                  <div class="d-flex flex-wrap align-items-center gap-2">
+                    <span class="badge text-bg-primary"><?php echo count($evaluationRows); ?> saved</span>
+                    <span class="badge text-bg-success">Overall <?php echo e(number_format($evaluationOverallPercent, 1)); ?>%</span>
+                    <span class="badge text-bg-light"><?php echo e(number_format($evaluationOverallAverage, 2)); ?> / 5</span>
                   </div>
                 </div>
+                <?php if (!$evaluationRows): ?>
+                  <div class="empty-state compact">
+                    <i class="fa-solid fa-clipboard-check"></i>
+                    <p>No saved evaluation responses yet.</p>
+                  </div>
+                <?php else: ?>
+                  <div class="evaluation-response-list is-compact">
+                    <?php foreach ($evaluationRows as $response): ?>
+                      <?php
+                        $ratingTotal = 0;
+                        $ratingCount = 0;
+                        foreach (kiwiEvaluationRatingFieldNames() as $fieldName) {
+                            if (isset($response[$fieldName])) {
+                                $ratingTotal += (int) $response[$fieldName];
+                                $ratingCount++;
+                            }
+                        }
+                        $ratingAverage = $ratingCount > 0 ? round($ratingTotal / $ratingCount, 2) : 0;
+                        $ratingPercent = $ratingAverage > 0 ? round(($ratingAverage / 5) * 100, 1) : 0;
+                        $responseLearnerName = trim((string) ($response['first_name'] ?? '') . ' ' . (string) ($response['last_name'] ?? ''));
+                        $responseDisplayName = $responseLearnerName !== '' ? $responseLearnerName : (string) ($response['attendee_name'] ?? 'Learner');
+                        $responseEmail = (string) ($response['learner_email'] ?? $response['attendee_email'] ?? '');
+                        $responseModalId = 'evaluationResponseModal' . (int) $response['id'];
+                      ?>
+                      <button class="evaluation-response-row" type="button" data-bs-toggle="modal" data-bs-target="#<?php echo e($responseModalId); ?>">
+                        <span>
+                          <strong><?php echo e($responseDisplayName); ?></strong>
+                          <small><?php echo e($responseEmail !== '' ? $responseEmail : (string) ($response['learner_number'] ?? '')); ?></small>
+                        </span>
+                        <span class="evaluation-score-pill">
+                          <?php echo e(number_format($ratingPercent, 1)); ?>%
+                          <small><?php echo e(number_format($ratingAverage, 2)); ?> / 5</small>
+                        </span>
+                      </button>
+                    <?php endforeach; ?>
+                  </div>
+                <?php endif; ?>
               </div>
             <?php endif; ?>
           </div>
@@ -4206,6 +4152,134 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
       </section>
     </main>
   </div>
+
+  <?php if ($tool === 'evaluations' && kiwiClassEvaluationColumnsReady($classEvaluationColumns) && $classEvaluationTableReady): ?>
+    <div class="modal fade" id="evaluationSettingsModal" tabindex="-1" aria-labelledby="evaluationSettingsModalLabel" aria-hidden="true">
+      <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+        <div class="modal-content">
+          <div class="modal-header">
+            <div>
+              <span class="section-kicker">Evaluations</span>
+              <h2 class="modal-title h5" id="evaluationSettingsModalLabel">Evaluation settings</h2>
+            </div>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <form method="post" class="module-form">
+            <div class="modal-body">
+              <input type="hidden" name="action" value="save_evaluation_settings">
+              <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
+              <input type="hidden" name="tool" value="evaluations">
+              <div class="mb-3">
+                <label class="form-label" for="class_type">Class tag</label>
+                <select class="form-select" id="class_type" name="class_type">
+                  <option value="Course" <?php echo ($class['class_type'] ?? 'Course') === 'Course' ? 'selected' : ''; ?>>Course</option>
+                  <option value="Seminar" <?php echo ($class['class_type'] ?? 'Course') === 'Seminar' ? 'selected' : ''; ?>>Seminar</option>
+                </select>
+              </div>
+              <div class="mb-3">
+                <label class="form-label" for="seminar_title">Seminar title / current title</label>
+                <input type="text" class="form-control" id="seminar_title" name="seminar_title" value="<?php echo e((string) ($class['seminar_title'] ?? $class['class_name'])); ?>">
+              </div>
+              <div class="mb-3">
+                <label class="form-label" for="seminar_presenter">Presenter / speaker / teacher</label>
+                <input type="text" class="form-control" id="seminar_presenter" name="seminar_presenter" value="<?php echo e((string) ($class['seminar_presenter'] ?? $class['display_teacher'] ?? '')); ?>">
+              </div>
+              <div class="row g-3">
+                <div class="col-sm-6">
+                  <label class="form-label" for="seminar_date">Date</label>
+                  <input type="date" class="form-control" id="seminar_date" name="seminar_date" value="<?php echo e((string) ($class['seminar_date'] ?? '')); ?>">
+                </div>
+                <div class="col-sm-6">
+                  <label class="form-label" for="seminar_venue">Venue / platform</label>
+                  <input type="text" class="form-control" id="seminar_venue" name="seminar_venue" value="<?php echo e((string) ($class['seminar_venue'] ?? '')); ?>">
+                </div>
+              </div>
+              <?php if (!empty($classEvaluationColumns['evaluation_enabled'])): ?>
+                <div class="form-check form-switch mt-3">
+                  <input class="form-check-input" type="checkbox" role="switch" id="evaluation_enabled" name="evaluation_enabled" value="1" <?php echo kiwiEvaluationEnabled($class, $classEvaluationColumns) ? 'checked' : ''; ?>>
+                  <label class="form-check-label" for="evaluation_enabled">Allow learners to answer the evaluation form</label>
+                </div>
+              <?php else: ?>
+                <div class="alert alert-warning mt-3 mb-0" role="alert">
+                  Add the <strong>evaluation_enabled</strong> column to enable learner evaluation visibility control.
+                </div>
+              <?php endif; ?>
+            </div>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+              <button type="submit" class="btn btn-primary" <?php echo !$canManageEvaluationsEdit ? 'disabled' : ''; ?>>
+                <i class="fa-solid fa-floppy-disk me-2"></i>Save Evaluation Settings
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <?php foreach ($evaluationRows as $response): ?>
+      <?php
+        $ratingTotal = 0;
+        $ratingCount = 0;
+        foreach (kiwiEvaluationRatingFieldNames() as $fieldName) {
+            if (isset($response[$fieldName])) {
+                $ratingTotal += (int) $response[$fieldName];
+                $ratingCount++;
+            }
+        }
+        $ratingAverage = $ratingCount > 0 ? round($ratingTotal / $ratingCount, 2) : 0;
+        $ratingPercent = $ratingAverage > 0 ? round(($ratingAverage / 5) * 100, 1) : 0;
+        $responseLearnerName = trim((string) ($response['first_name'] ?? '') . ' ' . (string) ($response['last_name'] ?? ''));
+        $responseDisplayName = $responseLearnerName !== '' ? $responseLearnerName : (string) ($response['attendee_name'] ?? 'Learner');
+        $responseEmail = (string) ($response['learner_email'] ?? $response['attendee_email'] ?? '');
+        $responseModalId = 'evaluationResponseModal' . (int) $response['id'];
+      ?>
+      <div class="modal fade" id="<?php echo e($responseModalId); ?>" tabindex="-1" aria-labelledby="<?php echo e($responseModalId); ?>Label" aria-hidden="true">
+        <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
+          <div class="modal-content">
+            <div class="modal-header">
+              <div>
+                <span class="section-kicker">Evaluation Feedback</span>
+                <h2 class="modal-title h5" id="<?php echo e($responseModalId); ?>Label"><?php echo e($responseDisplayName); ?></h2>
+                <p class="mb-0 text-secondary small"><?php echo e($responseEmail !== '' ? $responseEmail : (string) ($response['learner_number'] ?? '')); ?></p>
+              </div>
+              <span class="badge text-bg-success ms-auto me-3"><?php echo e(number_format($ratingPercent, 1)); ?>%</span>
+              <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+              <div class="evaluation-response-meta mt-0 mb-3">
+                <span>Average: <?php echo e(number_format($ratingAverage, 2)); ?> / 5</span>
+                <span>Overall: <?php echo e((string) $response['overall_rating']); ?></span>
+                <span>Recommend: <?php echo e((string) $response['recommend']); ?></span>
+                <span><?php echo e(date('M d, Y g:i A', strtotime((string) $response['created_at']))); ?></span>
+              </div>
+              <div class="evaluation-rating-report">
+                <?php foreach (kiwiEvaluationRatingItems() as $section): ?>
+                  <div class="evaluation-rating-report-section">
+                    <h4><?php echo e((string) $section['title']); ?></h4>
+                    <?php foreach ($section['items'] as $fieldName => $label): ?>
+                      <div class="evaluation-rating-report-row">
+                        <span><?php echo e((string) $label); ?></span>
+                        <strong><?php echo e((string) ($response[$fieldName] ?? 'N/A')); ?></strong>
+                      </div>
+                    <?php endforeach; ?>
+                  </div>
+                <?php endforeach; ?>
+              </div>
+              <div class="evaluation-feedback">
+                <p><strong>Useful:</strong> <?php echo e((string) ($response['feedback_useful'] ?? '')); ?></p>
+                <p><strong>Improvements:</strong> <?php echo e((string) ($response['feedback_improvements'] ?? '')); ?></p>
+                <p><strong>Future topics:</strong> <?php echo e((string) ($response['feedback_topics'] ?? '')); ?></p>
+                <?php if (!empty($response['attendee_name']) || !empty($response['attendee_email'])): ?>
+                  <?php if (!empty($response['attendee_name'])): ?><p><strong>Attendee name:</strong> <?php echo e((string) $response['attendee_name']); ?></p><?php endif; ?>
+                  <?php if (!empty($response['attendee_email'])): ?><p><strong>Attendee email:</strong> <?php echo e((string) $response['attendee_email']); ?></p><?php endif; ?>
+                <?php endif; ?>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    <?php endforeach; ?>
+  <?php endif; ?>
 
   <div class="modal fade" id="addClassLearnersModal" tabindex="-1" aria-labelledby="addClassLearnersModalLabel" aria-hidden="true">
     <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable class-learner-picker-modal">
@@ -5063,6 +5137,6 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
       }
     })();
   </script>
-  <script src="js/app.js?v=20260714-evaluation-responses"></script>
+  <script src="js/app.js?v=20260714-evaluation-modal"></script>
 </body>
 </html>
