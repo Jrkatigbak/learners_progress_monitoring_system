@@ -144,6 +144,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $errors[] = 'Evaluation form is not ready yet.';
     }
 
+    if ($existingEvaluation) {
+        $errors[] = 'You already submitted this evaluation.';
+    }
+
     $ratings = [];
     foreach ($ratingSections as $section) {
         foreach ($section['items'] as $field => $label) {
@@ -181,7 +185,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if (!$errors) {
-        $existingId = (int) ($existingEvaluation['id'] ?? 0);
         $params = array_merge($ratings, [
             'class_id' => $classId,
             'learner_id' => (int) $learner['id'],
@@ -194,34 +197,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'attendee_email' => $attendeeEmail !== '' ? $attendeeEmail : null,
         ]);
 
-        if ($existingId > 0) {
-            $params['id'] = $existingId;
-            $statement = $pdo->prepare(
-                'UPDATE class_evaluations
-                 SET content_objectives_clear = :content_objectives_clear,
-                     content_relevant = :content_relevant,
-                     content_organized = :content_organized,
-                     content_depth = :content_depth,
-                     presenter_knowledge = :presenter_knowledge,
-                     presenter_style = :presenter_style,
-                     presenter_questions = :presenter_questions,
-                     presenter_pace = :presenter_pace,
-                     logistics_venue = :logistics_venue,
-                     logistics_technology = :logistics_technology,
-                     logistics_registration = :logistics_registration,
-                     logistics_materials = :logistics_materials,
-                     overall_rating = :overall_rating,
-                     recommend = :recommend,
-                     feedback_useful = :feedback_useful,
-                     feedback_improvements = :feedback_improvements,
-                     feedback_topics = :feedback_topics,
-                     attendee_name = :attendee_name,
-                     attendee_email = :attendee_email,
-                     updated_at = NOW()
-                 WHERE id = :id'
-            );
-            $statement->execute($params);
-        } else {
+        try {
             $statement = $pdo->prepare(
                 'INSERT INTO class_evaluations
                     (class_id, learner_id, content_objectives_clear, content_relevant, content_organized, content_depth,
@@ -235,10 +211,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                      :overall_rating, :recommend, :feedback_useful, :feedback_improvements, :feedback_topics, :attendee_name, :attendee_email)'
             );
             $statement->execute($params);
+        } catch (PDOException $exception) {
+            error_log('Evaluation save failed: ' . $exception->getMessage());
+            $errors[] = 'Evaluation could not be saved. Please check the required fields and try again.';
         }
 
-        header('Location: learner_evaluation.php?course_id=' . $courseId . '&success=saved');
-        exit;
+        if (!$errors) {
+            header('Location: learner_evaluation.php?course_id=' . $courseId . '&success=saved');
+            exit;
+        }
     }
 }
 
@@ -318,7 +299,7 @@ function postedOrExisting(string $field, ?array $existingEvaluation, string $fal
         </a>
 
         <?php if ($success === 'saved'): ?>
-          <div class="alert alert-success" role="alert">Evaluation saved successfully. You can review and update your response anytime.</div>
+          <div class="alert alert-success" role="alert">Evaluation submitted successfully.</div>
         <?php endif; ?>
 
         <?php if ($errors): ?>
@@ -337,12 +318,12 @@ function postedOrExisting(string $field, ?array $existingEvaluation, string $fal
               <p class="small text-danger mb-0">Missing database fields: <?php echo e(implode(', ', $evaluationMissingColumns)); ?></p>
             <?php endif; ?>
           </div>
+        <?php elseif ($existingEvaluation): ?>
+          <div class="empty-state">
+            <i class="fa-solid fa-circle-check"></i>
+            <p>You already submitted this evaluation. Updates are no longer allowed.</p>
+          </div>
         <?php else: ?>
-          <?php if ($existingEvaluation): ?>
-            <div class="alert alert-info" role="alert">
-              You already submitted this evaluation. Review your answers below and click <strong>Update Evaluation</strong> to save changes.
-            </div>
-          <?php endif; ?>
           <form method="post" class="evaluation-form-card" novalidate>
             <input type="hidden" name="course_id" value="<?php echo $courseId; ?>">
             <div class="evaluation-form-head">
@@ -433,7 +414,7 @@ function postedOrExisting(string $field, ?array $existingEvaluation, string $fal
             </section>
 
             <button type="submit" class="btn btn-primary">
-              <i class="fa-solid fa-paper-plane me-2"></i><?php echo $existingEvaluation ? 'Update Evaluation' : 'Submit Evaluation'; ?>
+              <i class="fa-solid fa-paper-plane me-2"></i>Submit Evaluation
             </button>
           </form>
         <?php endif; ?>
