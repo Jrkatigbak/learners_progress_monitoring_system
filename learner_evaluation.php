@@ -69,11 +69,14 @@ $learnerCourseContext = kiwiLearnerCourseContext($pdo, (int) $learner['id'], $co
 $evaluationColumns = kiwiClassEvaluationColumns($pdo);
 $evaluationColumnsReady = kiwiClassEvaluationColumnsReady($evaluationColumns);
 $evaluationTableReady = kiwiClassEvaluationsTableReady($pdo);
+$evaluationTableColumns = kiwiClassEvaluationTableColumns($pdo);
+$evaluationMissingColumns = kiwiClassEvaluationMissingTableColumns($evaluationTableColumns);
+$evaluationDataReady = $evaluationTableReady && $evaluationMissingColumns === [];
 $evaluationEnabled = kiwiEvaluationEnabled($course, $evaluationColumns);
 $ratingSections = kiwiEvaluationRatingItems();
 $existingEvaluation = null;
 
-if (!$evaluationColumnsReady || !$evaluationTableReady || !$evaluationEnabled) {
+if (!$evaluationColumnsReady || !$evaluationDataReady || !$evaluationEnabled) {
     http_response_code(403);
     $disabledMessage = !$evaluationEnabled
         ? 'Evaluation form is currently disabled for this class.'
@@ -127,7 +130,7 @@ if (!$evaluationColumnsReady || !$evaluationTableReady || !$evaluationEnabled) {
     exit;
 }
 
-if ($evaluationTableReady) {
+if ($evaluationDataReady) {
     $existingStatement = $pdo->prepare('SELECT * FROM class_evaluations WHERE class_id = :class_id AND learner_id = :learner_id AND deleted_at IS NULL LIMIT 1');
     $existingStatement->execute([
         'class_id' => $classId,
@@ -137,7 +140,7 @@ if ($evaluationTableReady) {
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    if (!$evaluationColumnsReady || !$evaluationTableReady) {
+    if (!$evaluationColumnsReady || !$evaluationDataReady) {
         $errors[] = 'Evaluation form is not ready yet.';
     }
 
@@ -326,10 +329,13 @@ function postedOrExisting(string $field, ?array $existingEvaluation, string $fal
           </div>
         <?php endif; ?>
 
-        <?php if (!$evaluationColumnsReady || !$evaluationTableReady): ?>
+        <?php if (!$evaluationColumnsReady || !$evaluationDataReady): ?>
           <div class="empty-state">
             <i class="fa-solid fa-clipboard-check"></i>
             <p>The evaluation form is not ready yet.</p>
+            <?php if ($evaluationMissingColumns): ?>
+              <p class="small text-danger mb-0">Missing database fields: <?php echo e(implode(', ', $evaluationMissingColumns)); ?></p>
+            <?php endif; ?>
           </div>
         <?php else: ?>
           <?php if ($existingEvaluation): ?>

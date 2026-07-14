@@ -45,6 +45,72 @@ function kiwiClassEvaluationsTableReady(PDO $pdo): bool
     return (bool) $statement->fetchColumn();
 }
 
+function kiwiEvaluationRatingFieldNames(): array
+{
+    $fieldNames = [];
+
+    foreach (kiwiEvaluationRatingItems() as $section) {
+        foreach ($section['items'] as $fieldName => $_label) {
+            $fieldNames[] = $fieldName;
+        }
+    }
+
+    return $fieldNames;
+}
+
+function kiwiClassEvaluationRequiredTableColumns(): array
+{
+    return array_merge([
+        'id',
+        'class_id',
+        'learner_id',
+    ], kiwiEvaluationRatingFieldNames(), [
+        'overall_rating',
+        'recommend',
+        'feedback_useful',
+        'feedback_improvements',
+        'feedback_topics',
+        'attendee_name',
+        'attendee_email',
+        'created_at',
+        'updated_at',
+        'deleted_at',
+    ]);
+}
+
+function kiwiClassEvaluationTableColumns(PDO $pdo): array
+{
+    if (!kiwiClassEvaluationsTableReady($pdo)) {
+        return [];
+    }
+
+    $columns = [];
+
+    foreach ($pdo->query('DESCRIBE class_evaluations') as $row) {
+        $columns[(string) $row['Field']] = true;
+    }
+
+    return $columns;
+}
+
+function kiwiClassEvaluationMissingTableColumns(array $columns): array
+{
+    $missing = [];
+
+    foreach (kiwiClassEvaluationRequiredTableColumns() as $fieldName) {
+        if (empty($columns[$fieldName])) {
+            $missing[] = $fieldName;
+        }
+    }
+
+    return $missing;
+}
+
+function kiwiClassEvaluationTableColumnsReady(array $columns): bool
+{
+    return kiwiClassEvaluationMissingTableColumns($columns) === [];
+}
+
 function kiwiEvaluationRatingItems(): array
 {
     return [

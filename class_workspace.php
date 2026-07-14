@@ -557,6 +557,9 @@ $learnerGradeColumns = learnerGradeColumns($pdo);
 $classCertificateColumns = kiwiClassCertificateColumns($pdo);
 $classEvaluationColumns = kiwiClassEvaluationColumns($pdo);
 $classEvaluationsTableReady = kiwiClassEvaluationsTableReady($pdo);
+$classEvaluationTableColumns = kiwiClassEvaluationTableColumns($pdo);
+$classEvaluationMissingColumns = kiwiClassEvaluationMissingTableColumns($classEvaluationTableColumns);
+$classEvaluationTableReady = $classEvaluationsTableReady && $classEvaluationMissingColumns === [];
 
 if (!$isAdmin && !$isTeacher) {
     header('Location: ' . $auth->redirectPath());
@@ -2599,7 +2602,7 @@ $learnerStatement->execute([
 $learners = $learnerStatement->fetchAll();
 
 $evaluationRows = [];
-if ($classEvaluationsTableReady) {
+if ($classEvaluationTableReady) {
     $evaluationStatement = $pdo->prepare(
         'SELECT class_evaluations.*,
                 learners.learner_number,
@@ -4068,9 +4071,12 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
               </div>
             </div>
 
-            <?php if (!kiwiClassEvaluationColumnsReady($classEvaluationColumns) || !$classEvaluationsTableReady): ?>
+            <?php if (!kiwiClassEvaluationColumnsReady($classEvaluationColumns) || !$classEvaluationTableReady): ?>
               <div class="alert alert-warning mb-0" role="alert">
                 Evaluation database fields are not installed yet. Add the evaluation columns and the <strong>class_evaluations</strong> table, then reload this page.
+                <?php if ($classEvaluationMissingColumns): ?>
+                  <br><strong>Missing class_evaluations columns:</strong> <?php echo e(implode(', ', $classEvaluationMissingColumns)); ?>
+                <?php endif; ?>
               </div>
             <?php else: ?>
               <div class="row g-4">
@@ -4137,10 +4143,9 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
                       <div class="evaluation-response-list">
                         <?php foreach ($evaluationRows as $response): ?>
                           <?php
-                            $ratingFields = array_keys(array_merge(...array_map(static fn ($section): array => $section['items'], kiwiEvaluationRatingItems())));
                             $ratingTotal = 0;
                             $ratingCount = 0;
-                            foreach ($ratingFields as $fieldName) {
+                            foreach (kiwiEvaluationRatingFieldNames() as $fieldName) {
                                 if (isset($response[$fieldName])) {
                                     $ratingTotal += (int) $response[$fieldName];
                                     $ratingCount++;
