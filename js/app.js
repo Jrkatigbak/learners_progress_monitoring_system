@@ -206,9 +206,54 @@ $(function () {
     }
   });
 
-  $(document).on('submit', '.evaluation-form-card', function () {
+  $(document).on('submit', '.evaluation-form-card', function (event) {
     var $form = $(this);
     var $button = $form.find('button[type="submit"]').first();
+    var missingGroup = '';
+
+    $form.find('input[type="radio"][required]').each(function () {
+      var groupName = $(this).attr('name');
+
+      if (missingGroup || !groupName) {
+        return;
+      }
+
+      if (!$form.find('input[name="' + groupName + '"]:checked').length) {
+        missingGroup = groupName;
+      }
+    });
+
+    if (missingGroup) {
+      event.preventDefault();
+
+      var $firstMissing = $form.find('input[name="' + missingGroup + '"]').first();
+      var $section = $firstMissing.closest('.evaluation-section');
+      var sectionTitle = $.trim($section.find('h3').first().text()) || 'Evaluation item';
+
+      if (window.Swal) {
+        Swal.fire({
+          icon: 'warning',
+          title: 'Complete evaluation ratings',
+          text: 'Please answer all rating items before submitting. Missing section: ' + sectionTitle,
+          confirmButtonColor: '#f58220'
+        });
+      } else {
+        window.alert('Please answer all rating items before submitting. Missing section: ' + sectionTitle);
+      }
+
+      if ($firstMissing.length) {
+        $('html, body').animate({ scrollTop: Math.max(0, $firstMissing.offset().top - 140) }, 250);
+        $firstMissing.trigger('focus');
+      }
+
+      return false;
+    }
+
+    if (!$form[0].checkValidity()) {
+      event.preventDefault();
+      $form[0].reportValidity();
+      return false;
+    }
 
     if ($button.prop('disabled')) {
       return false;

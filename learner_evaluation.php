@@ -92,7 +92,7 @@ if (!$evaluationColumnsReady || !$evaluationTableReady || !$evaluationEnabled) {
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=20260714-evaluation-access" rel="stylesheet">
+  <link href="css/style.css?v=20260714-evaluation-submit" rel="stylesheet">
 </head>
 <body class="dashboard-page">
   <div class="app-layout">
@@ -257,7 +257,7 @@ function postedOrExisting(string $field, ?array $existingEvaluation, string $fal
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=20260714-evaluation-access" rel="stylesheet">
+  <link href="css/style.css?v=20260714-evaluation-submit" rel="stylesheet">
 </head>
 <body class="dashboard-page">
   <div class="app-layout">
@@ -328,7 +328,7 @@ function postedOrExisting(string $field, ?array $existingEvaluation, string $fal
             <p>The evaluation form is not ready yet.</p>
           </div>
         <?php else: ?>
-          <form method="post" class="evaluation-form-card">
+          <form method="post" class="evaluation-form-card" novalidate>
             <input type="hidden" name="course_id" value="<?php echo $courseId; ?>">
             <div class="evaluation-form-head">
               <h2><?php echo e(kiwiEvaluationFormTitle($course)); ?></h2>
@@ -429,6 +429,6 @@ function postedOrExisting(string $field, ?array $existingEvaluation, string $fal
   <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
-  <script src="js/app.js?v=20260714-evaluation-access"></script>
+  <script src="js/app.js?v=20260714-evaluation-submit"></script>
 </body>
 </html>
