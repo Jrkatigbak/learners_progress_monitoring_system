@@ -46,6 +46,9 @@ if ($learner && $courseId > 0) {
                 NULL AS seminar_presenter,
                 NULL AS seminar_date,
                 NULL AS seminar_venue';
+    $evaluationSelect .= !empty($evaluationColumns['evaluation_enabled'])
+        ? ', classes.evaluation_enabled'
+        : ', 1 AS evaluation_enabled';
     $certificateSelect = kiwiClassCertificateReady($certificateColumns)
         ? ', classes.certificate_template_image'
             . (!empty($certificateColumns['certificate_download_enabled']) ? ', classes.certificate_download_enabled' : ', 1 AS certificate_download_enabled')
@@ -96,7 +99,9 @@ $quizzes = [];
 $assignments = [];
 $gradeItems = [];
 $evaluationSubmitted = false;
-$evaluationReady = kiwiClassEvaluationColumnsReady($evaluationColumns) && kiwiClassEvaluationsTableReady($pdo);
+$evaluationReady = kiwiClassEvaluationColumnsReady($evaluationColumns)
+    && kiwiClassEvaluationsTableReady($pdo)
+    && kiwiEvaluationEnabled($course, $evaluationColumns);
 
 if ($classId > 0) {
     $classmatesStatement = $pdo->prepare(
@@ -219,10 +224,16 @@ $moduleCards = [
     ['label' => 'Quizzes', 'icon' => 'fa-circle-question', 'count' => count($quizzes), 'url' => 'learner_quizzes.php?course_id=' . $courseId],
     ['label' => 'Assignments', 'icon' => 'fa-file-pen', 'count' => count($assignments), 'url' => 'learner_assignments.php?course_id=' . $courseId],
     ['label' => 'Grades', 'icon' => 'fa-star', 'count' => count($gradeItems), 'url' => 'learner_grades.php?course_id=' . $courseId],
-    ['label' => 'Evaluation', 'icon' => 'fa-clipboard-check', 'count' => $evaluationSubmitted ? 1 : 0, 'url' => $evaluationReady ? 'learner_evaluation.php?course_id=' . $courseId : '#evaluation'],
     ['label' => 'Classmates', 'icon' => 'fa-users', 'count' => count($classmates), 'url' => '#classmates'],
-    ['label' => 'Certificates', 'icon' => 'fa-award', 'count' => $certificateDownloadsEnabled ? 1 : 0, 'url' => $certificateDownloadsEnabled ? 'certificate.php?class_id=' . $classId . '&learner_id=' . (int) $learner['id'] : '#certificates'],
 ];
+
+if ($evaluationReady) {
+    $moduleCards[] = ['label' => 'Evaluation', 'icon' => 'fa-clipboard-check', 'count' => $evaluationSubmitted ? 1 : 0, 'url' => 'learner_evaluation.php?course_id=' . $courseId];
+}
+
+if ($certificateDownloadsEnabled) {
+    $moduleCards[] = ['label' => 'Certificates', 'icon' => 'fa-award', 'count' => 1, 'url' => 'certificate.php?class_id=' . $classId . '&learner_id=' . (int) $learner['id']];
+}
 ?>
 <!doctype html>
 <html lang="en">
@@ -237,7 +248,7 @@ $moduleCards = [
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=20260713-certificate-access" rel="stylesheet">
+  <link href="css/style.css?v=20260714-evaluation-access" rel="stylesheet">
 </head>
 <body class="dashboard-page">
   <div class="app-layout">
@@ -473,16 +484,14 @@ $moduleCards = [
           <?php endif; ?>
         </section>
 
-        <section class="learner-course-section" id="evaluation">
-          <div class="section-heading-row">
-            <div>
-              <span class="section-kicker">Evaluation</span>
-              <h2><?php echo e(kiwiEvaluationFormTitle($course)); ?></h2>
+        <?php if ($evaluationReady): ?>
+          <section class="learner-course-section" id="evaluation">
+            <div class="section-heading-row">
+              <div>
+                <span class="section-kicker">Evaluation</span>
+                <h2><?php echo e(kiwiEvaluationFormTitle($course)); ?></h2>
+              </div>
             </div>
-          </div>
-          <?php if (!$evaluationReady): ?>
-            <div class="empty-state compact"><i class="fa-solid fa-clipboard-check"></i><p>Evaluation form is not ready yet.</p></div>
-          <?php else: ?>
             <div class="learner-course-list">
               <article class="learner-course-list-item">
                 <i class="fa-solid fa-clipboard-check"></i>
@@ -497,8 +506,8 @@ $moduleCards = [
                 </a>
               </article>
             </div>
-          <?php endif; ?>
-        </section>
+          </section>
+        <?php endif; ?>
 
         <section class="learner-course-section" id="classmates">
           <div class="section-heading-row">
@@ -567,6 +576,6 @@ $moduleCards = [
 
   <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-  <script src="js/app.js?v=20260713-certificate-access"></script>
+  <script src="js/app.js?v=20260714-evaluation-access"></script>
 </body>
 </html>

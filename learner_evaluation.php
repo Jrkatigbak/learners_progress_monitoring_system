@@ -66,10 +66,66 @@ $classId = (int) $course['id'];
 $learnerName = trim($learner['first_name'] . ' ' . $learner['last_name']);
 $learnerInitials = strtoupper(substr($learnerName, 0, 1));
 $learnerCourseContext = kiwiLearnerCourseContext($pdo, (int) $learner['id'], $courseId);
-$evaluationColumnsReady = kiwiClassEvaluationColumnsReady(kiwiClassEvaluationColumns($pdo));
+$evaluationColumns = kiwiClassEvaluationColumns($pdo);
+$evaluationColumnsReady = kiwiClassEvaluationColumnsReady($evaluationColumns);
 $evaluationTableReady = kiwiClassEvaluationsTableReady($pdo);
+$evaluationEnabled = kiwiEvaluationEnabled($course, $evaluationColumns);
 $ratingSections = kiwiEvaluationRatingItems();
 $existingEvaluation = null;
+
+if (!$evaluationColumnsReady || !$evaluationTableReady || !$evaluationEnabled) {
+    http_response_code(403);
+    $disabledMessage = !$evaluationEnabled
+        ? 'Evaluation form is currently disabled for this class.'
+        : 'Evaluation form is not ready yet.';
+    ?>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Kiwi Digital | Evaluation unavailable</title>
+  <link rel="icon" type="image/png" href="images/kiwi-logo.png">
+  <link rel="apple-touch-icon" href="images/kiwi-logo.png">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" rel="stylesheet">
+  <script>
+    document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
+  </script>
+  <link href="css/style.css?v=20260714-evaluation-access" rel="stylesheet">
+</head>
+<body class="dashboard-page">
+  <div class="app-layout">
+    <aside class="sidebar">
+      <a class="sidebar-brand" href="learner_dashboard.php">
+        <img src="images/kiwi-logo.png" alt="Kiwi Digital Tech Inc." class="brand-logo">
+        <span>
+          <strong>Kiwi Digital</strong>
+          <small>Learners Progress Monitoring System</small>
+        </span>
+      </a>
+      <?php kiwiRenderLearnerCourseSidebar($learnerCourseContext, $learnerName, 'evaluation', (int) $learner['id']); ?>
+    </aside>
+    <main class="main-panel">
+      <header class="topbar">
+        <div>
+          <span class="section-kicker">Class Portal</span>
+          <h1 class="h3 mb-0">Evaluation unavailable</h1>
+        </div>
+      </header>
+      <section class="content-shell">
+        <div class="empty-state">
+          <i class="fa-solid fa-clipboard-check"></i>
+          <p><?php echo e($disabledMessage); ?></p>
+        </div>
+      </section>
+    </main>
+  </div>
+</body>
+</html>
+    <?php
+    exit;
+}
 
 if ($evaluationTableReady) {
     $existingStatement = $pdo->prepare('SELECT * FROM class_evaluations WHERE class_id = :class_id AND learner_id = :learner_id AND deleted_at IS NULL LIMIT 1');
@@ -201,7 +257,7 @@ function postedOrExisting(string $field, ?array $existingEvaluation, string $fal
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=20260713-learner-dashboard-nav" rel="stylesheet">
+  <link href="css/style.css?v=20260714-evaluation-access" rel="stylesheet">
 </head>
 <body class="dashboard-page">
   <div class="app-layout">
@@ -373,6 +429,6 @@ function postedOrExisting(string $field, ?array $existingEvaluation, string $fal
   <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
-  <script src="js/app.js?v=20260713-learner-dashboard-nav"></script>
+  <script src="js/app.js?v=20260714-evaluation-access"></script>
 </body>
 </html>

@@ -14,6 +14,7 @@ function kiwiClassEvaluationColumns(PDO $pdo): array
         'seminar_presenter' => isset($columns['seminar_presenter']),
         'seminar_date' => isset($columns['seminar_date']),
         'seminar_venue' => isset($columns['seminar_venue']),
+        'evaluation_enabled' => isset($columns['evaluation_enabled']),
     ];
 }
 
@@ -26,6 +27,15 @@ function kiwiClassEvaluationColumnsReady(array $columns): bool
     }
 
     return true;
+}
+
+function kiwiEvaluationEnabled(array $class, array $columns): bool
+{
+    if (empty($columns['evaluation_enabled'])) {
+        return true;
+    }
+
+    return (int) ($class['evaluation_enabled'] ?? 1) === 1;
 }
 
 function kiwiClassEvaluationsTableReady(PDO $pdo): bool

@@ -1090,12 +1090,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         if (!$errors) {
-            // Add learners only when they are not connected to any other class-backed course.
+            // Add learners only when they are not actively connected to another class-backed course.
             $eligibleStatement = $pdo->prepare(
                 'SELECT learners.id
                  FROM learners
                  LEFT JOIN course_enrollments
                     ON course_enrollments.learner_id = learners.id
+                   AND course_enrollments.course_id <> :course_id
                    AND course_enrollments.deleted_at IS NULL
                  WHERE learners.id = :learner_id
                    AND learners.deleted_at IS NULL
@@ -1103,25 +1104,55 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                    AND course_enrollments.id IS NULL
                  LIMIT 1'
             );
-            $enrollStatement = $pdo->prepare(
+            $enrollmentLookup = $pdo->prepare(
+                'SELECT id
+                 FROM course_enrollments
+                 WHERE learner_id = :learner_id
+                   AND course_id = :course_id
+                 LIMIT 1'
+            );
+            $restoreEnrollment = $pdo->prepare(
+                'UPDATE course_enrollments
+                 SET enrollment_status = "Enrolled",
+                     deleted_at = NULL,
+                     updated_at = NOW()
+                 WHERE id = :id'
+            );
+            $insertEnrollment = $pdo->prepare(
                 'INSERT INTO course_enrollments (learner_id, course_id, enrollment_status)
-                 VALUES (:learner_id, :course_id, "Enrolled")'
+                 VALUES (:learner_id, :course_id, "Enrolled")
+                 ON DUPLICATE KEY UPDATE
+                    enrollment_status = VALUES(enrollment_status),
+                    deleted_at = NULL,
+                    updated_at = NOW()'
             );
             $addedCount = 0;
 
             foreach ($selectedLearnerIds as $learnerId) {
                 $eligibleStatement->execute([
                     'learner_id' => $learnerId,
+                    'course_id' => $courseId,
                 ]);
 
                 if (!$eligibleStatement->fetch()) {
                     continue;
                 }
 
-                $enrollStatement->execute([
+                $enrollmentLookup->execute([
                     'learner_id' => $learnerId,
                     'course_id' => $courseId,
                 ]);
+                $existingEnrollmentId = (int) $enrollmentLookup->fetchColumn();
+
+                if ($existingEnrollmentId > 0) {
+                    $restoreEnrollment->execute(['id' => $existingEnrollmentId]);
+                } else {
+                    $insertEnrollment->execute([
+                        'learner_id' => $learnerId,
+                        'course_id' => $courseId,
+                    ]);
+                }
+
                 $addedCount++;
             }
 
@@ -2500,6 +2531,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $seminarPresenter = trim((string) ($_POST['seminar_presenter'] ?? ''));
         $seminarDate = trim((string) ($_POST['seminar_date'] ?? ''));
         $seminarVenue = trim((string) ($_POST['seminar_venue'] ?? ''));
+        $evaluationEnabled = isset($_POST['evaluation_enabled']) ? 1 : 0;
 
         if (!kiwiClassEvaluationColumnsReady($classEvaluationColumns)) {
             $errors[] = 'Evaluation database fields are not installed yet. Add the evaluation columns to the classes table first.';
@@ -2510,23 +2542,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         if (!$errors) {
-            $evaluationSettings = $pdo->prepare(
-                'UPDATE classes
-                 SET class_type = :class_type,
+            $evaluationSetSql = 'class_type = :class_type,
                      seminar_title = :seminar_title,
                      seminar_presenter = :seminar_presenter,
                      seminar_date = :seminar_date,
-                     seminar_venue = :seminar_venue
-                 WHERE id = :id'
-            );
-            $evaluationSettings->execute([
+                     seminar_venue = :seminar_venue';
+            $evaluationParams = [
                 'class_type' => $classType,
                 'seminar_title' => $seminarTitle !== '' ? $seminarTitle : null,
                 'seminar_presenter' => $seminarPresenter !== '' ? $seminarPresenter : null,
                 'seminar_date' => $seminarDate !== '' ? $seminarDate : null,
                 'seminar_venue' => $seminarVenue !== '' ? $seminarVenue : null,
                 'id' => $classId,
-            ]);
+            ];
+
+            if (!empty($classEvaluationColumns['evaluation_enabled'])) {
+                $evaluationSetSql .= ',
+                     evaluation_enabled = :evaluation_enabled';
+                $evaluationParams['evaluation_enabled'] = $evaluationEnabled;
+            }
+
+            $evaluationSettings = $pdo->prepare(
+                'UPDATE classes
+                 SET ' . $evaluationSetSql . '
+                 WHERE id = :id'
+            );
+            $evaluationSettings->execute($evaluationParams);
 
             header('Location: class_workspace.php?class_id=' . $classId . '&tool=evaluations&success=evaluation_settings_saved');
             exit;
@@ -2900,7 +2941,7 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=20260713-certificate-access" rel="stylesheet">
+  <link href="css/style.css?v=20260714-evaluation-access" rel="stylesheet">
   <?php echo kiwiSystemThemeStyle(); ?>
 </head>
 <body class="dashboard-page class-workspace-page class-workspace-<?php echo e($tool); ?>">
@@ -4016,7 +4057,15 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
                 <span class="section-kicker">Evaluations</span>
                 <h2 class="h5 mb-0"><?php echo e(kiwiEvaluationFormTitle($class)); ?></h2>
               </div>
-              <span class="badge text-bg-primary"><?php echo count($evaluationRows); ?> response<?php echo count($evaluationRows) === 1 ? '' : 's'; ?></span>
+              <div class="d-flex flex-wrap align-items-center gap-2">
+                <?php if (!empty($classEvaluationColumns['evaluation_enabled'])): ?>
+                  <?php $evaluationEnabled = kiwiEvaluationEnabled($class, $classEvaluationColumns); ?>
+                  <span class="badge <?php echo $evaluationEnabled ? 'text-bg-success' : 'text-bg-warning'; ?>">
+                    Learner evaluations <?php echo $evaluationEnabled ? 'enabled' : 'disabled'; ?>
+                  </span>
+                <?php endif; ?>
+                <span class="badge text-bg-primary"><?php echo count($evaluationRows); ?> response<?php echo count($evaluationRows) === 1 ? '' : 's'; ?></span>
+              </div>
             </div>
 
             <?php if (!kiwiClassEvaluationColumnsReady($classEvaluationColumns) || !$classEvaluationsTableReady): ?>
@@ -4055,6 +4104,16 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
                         <input type="text" class="form-control" id="seminar_venue" name="seminar_venue" value="<?php echo e((string) ($class['seminar_venue'] ?? '')); ?>">
                       </div>
                     </div>
+                    <?php if (!empty($classEvaluationColumns['evaluation_enabled'])): ?>
+                      <div class="form-check form-switch mt-3">
+                        <input class="form-check-input" type="checkbox" role="switch" id="evaluation_enabled" name="evaluation_enabled" value="1" <?php echo kiwiEvaluationEnabled($class, $classEvaluationColumns) ? 'checked' : ''; ?>>
+                        <label class="form-check-label" for="evaluation_enabled">Allow learners to answer the evaluation form</label>
+                      </div>
+                    <?php else: ?>
+                      <div class="alert alert-warning mt-3 mb-0" role="alert">
+                        Add the <strong>evaluation_enabled</strong> column to enable learner evaluation visibility control.
+                      </div>
+                    <?php endif; ?>
                     <button type="submit" class="btn btn-primary mt-3" <?php echo !$canManageEvaluationsEdit ? 'disabled' : ''; ?>>
                       <i class="fa-solid fa-floppy-disk me-2"></i>Save Evaluation Settings
                     </button>
@@ -4990,6 +5049,6 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
       }
     })();
   </script>
-  <script src="js/app.js?v=20260713-certificate-access"></script>
+  <script src="js/app.js?v=20260714-evaluation-access"></script>
 </body>
 </html>

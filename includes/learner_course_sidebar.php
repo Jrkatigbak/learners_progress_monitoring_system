@@ -29,6 +29,7 @@ function kiwiLearnerCourseContext(PDO $pdo, int $learnerId, int $courseId = 0, i
     }
 
     $certificateColumns = kiwiClassCertificateColumns($pdo);
+    $evaluationColumns = kiwiClassEvaluationColumns($pdo);
     $certificateTemplateSelect = !empty($certificateColumns['certificate_template_image'])
         ? ', classes.certificate_template_image'
         : ', NULL AS certificate_template_image';
@@ -47,6 +48,9 @@ function kiwiLearnerCourseContext(PDO $pdo, int $learnerId, int $courseId = 0, i
     $certificateDownloadSelect = !empty($certificateColumns['certificate_download_enabled'])
         ? ', classes.certificate_download_enabled'
         : ', 1 AS certificate_download_enabled';
+    $evaluationEnabledSelect = !empty($evaluationColumns['evaluation_enabled'])
+        ? ', classes.evaluation_enabled'
+        : ', 1 AS evaluation_enabled';
 
     $statement = $pdo->prepare(
         "SELECT courses.id AS course_id,
@@ -59,6 +63,7 @@ function kiwiLearnerCourseContext(PDO $pdo, int $learnerId, int $courseId = 0, i
                 {$certificateFontSizeSelect}
                 {$certificateFontColorSelect}
                 {$certificateDownloadSelect}
+                {$evaluationEnabledSelect}
          FROM courses
          INNER JOIN classes
            ON courses.course_code = CONCAT('CLASS-', classes.id)
@@ -97,7 +102,9 @@ function kiwiLearnerCourseContext(PDO $pdo, int $learnerId, int $courseId = 0, i
         return (int) $statement->fetchColumn();
     };
 
-    $evaluationReady = kiwiClassEvaluationColumnsReady(kiwiClassEvaluationColumns($pdo)) && kiwiClassEvaluationsTableReady($pdo);
+    $evaluationReady = kiwiClassEvaluationColumnsReady($evaluationColumns)
+        && kiwiClassEvaluationsTableReady($pdo)
+        && kiwiEvaluationEnabled($context, $evaluationColumns);
     $certificateReady = kiwiClassCertificateReady($certificateColumns) && !empty($context['certificate_template_image']);
     $certificateDownloadsEnabled = $certificateReady && kiwiCertificateDownloadsEnabled($context, $certificateColumns);
 
@@ -111,7 +118,7 @@ function kiwiLearnerCourseContext(PDO $pdo, int $learnerId, int $courseId = 0, i
             ['class_id' => $resolvedClassId]
         ),
         'materials_count' => $countQuery(
-            'SELECT COUNT(*) FROM class_materials WHERE class_id = :class_id AND deleted_at IS NULL',
+            'SELECT COUNT(*) FROM class_learning_materials WHERE class_id = :class_id AND deleted_at IS NULL',
             ['class_id' => $resolvedClassId]
         ),
         'quizzes_count' => $countQuery(
@@ -150,16 +157,24 @@ function kiwiLearnerCourseSidebarModules(array $context, int $learnerId): array
     $courseId = (int) $context['course_id'];
     $classId = (int) $context['class_id'];
 
-    return [
+    $modules = [
         ['key' => 'topics', 'label' => 'Topics', 'icon' => 'fa-list-check', 'count' => (int) $context['topics_count'], 'url' => 'learner_course.php?course_id=' . $courseId . '#topics'],
         ['key' => 'materials', 'label' => 'Materials', 'icon' => 'fa-folder-open', 'count' => (int) $context['materials_count'], 'url' => 'learner_course.php?course_id=' . $courseId . '#materials'],
         ['key' => 'quizzes', 'label' => 'Quizzes', 'icon' => 'fa-circle-question', 'count' => (int) $context['quizzes_count'], 'url' => 'learner_quizzes.php?course_id=' . $courseId],
         ['key' => 'assignments', 'label' => 'Assignments', 'icon' => 'fa-file-pen', 'count' => (int) $context['assignments_count'], 'url' => 'learner_assignments.php?course_id=' . $courseId],
         ['key' => 'grades', 'label' => 'Grades', 'icon' => 'fa-star', 'count' => (int) $context['grades_count'], 'url' => 'learner_grades.php?course_id=' . $courseId],
-        ['key' => 'evaluation', 'label' => 'Evaluation', 'icon' => 'fa-clipboard-check', 'count' => (int) $context['evaluation_count'], 'url' => !empty($context['evaluation_ready']) ? 'learner_evaluation.php?course_id=' . $courseId : 'learner_course.php?course_id=' . $courseId . '#evaluation'],
         ['key' => 'classmates', 'label' => 'Classmates', 'icon' => 'fa-users', 'count' => (int) $context['classmates_count'], 'url' => 'learner_course.php?course_id=' . $courseId . '#classmates'],
-        ['key' => 'certificates', 'label' => 'Certificates', 'icon' => 'fa-award', 'count' => (int) $context['certificate_count'], 'url' => !empty($context['certificate_ready']) ? 'certificate.php?class_id=' . $classId . '&learner_id=' . $learnerId : 'learner_course.php?course_id=' . $courseId . '#certificates'],
     ];
+
+    if (!empty($context['evaluation_ready'])) {
+        $modules[] = ['key' => 'evaluation', 'label' => 'Evaluation', 'icon' => 'fa-clipboard-check', 'count' => (int) $context['evaluation_count'], 'url' => 'learner_evaluation.php?course_id=' . $courseId];
+    }
+
+    if (!empty($context['certificate_ready'])) {
+        $modules[] = ['key' => 'certificates', 'label' => 'Certificates', 'icon' => 'fa-award', 'count' => (int) $context['certificate_count'], 'url' => 'certificate.php?class_id=' . $classId . '&learner_id=' . $learnerId];
+    }
+
+    return $modules;
 }
 
 function kiwiRenderLearnerCourseSidebar(?array $context, string $learnerName, string $activeModule = '', int $learnerId = 0): void
