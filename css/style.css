@@ -1914,6 +1914,87 @@ body {
   margin-top: 16px;
 }
 
+.quiz-answer-key-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  color: #23743a;
+  font-size: 0.84rem;
+  font-weight: 700;
+  border-radius: 999px;
+  background: rgba(25, 135, 84, 0.12);
+}
+
+.quiz-correct-selector {
+  gap: 8px;
+  min-width: 112px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.quiz-result-summary {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.quiz-result-summary span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  background: var(--surface-alt);
+}
+
+.quiz-result-summary strong {
+  color: var(--brand-dark);
+}
+
+.quiz-results-table td > span {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.quiz-result-detail-row > td {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.quiz-answer-detail-list {
+  display: grid;
+  gap: 10px;
+  padding: 12px 0 18px;
+}
+
+.quiz-answer-detail {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface-alt);
+}
+
+.quiz-answer-detail.is-correct {
+  border-color: rgba(25, 135, 84, 0.28);
+  background: rgba(25, 135, 84, 0.08);
+}
+
+.quiz-answer-detail.is-wrong {
+  border-color: rgba(220, 53, 69, 0.28);
+  background: rgba(220, 53, 69, 0.08);
+}
+
 .quiz-timer-bar {
   display: flex;
   align-items: center;
@@ -3284,6 +3365,21 @@ body {
   object-fit: contain;
 }
 
+.student-certificate-preview {
+  overflow: hidden;
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--surface-alt);
+  box-shadow: 0 18px 50px rgba(31, 26, 23, 0.08);
+}
+
+.student-certificate-preview img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
 .certificate-name-font-sample {
   margin-top: 16px;
   padding: 14px 16px;
@@ -3371,6 +3467,16 @@ body {
   padding: 18px;
   border: 1px solid var(--line);
   border-radius: 18px;
+  background: var(--surface-alt);
+}
+
+.evaluation-editor-block {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 14px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
   background: var(--surface-alt);
 }
 

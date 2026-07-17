@@ -171,7 +171,7 @@ function kiwiLearnerCourseSidebarModules(array $context, int $learnerId): array
     }
 
     if (!empty($context['certificate_ready'])) {
-        $modules[] = ['key' => 'certificates', 'label' => 'Certificates', 'icon' => 'fa-award', 'count' => (int) $context['certificate_count'], 'url' => 'certificate.php?class_id=' . $classId . '&learner_id=' . $learnerId];
+        $modules[] = ['key' => 'certificates', 'label' => 'Certificates', 'icon' => 'fa-award', 'count' => (int) $context['certificate_count'], 'url' => 'student-certificate.php?course_id=' . $courseId];
     }
 
     return $modules;

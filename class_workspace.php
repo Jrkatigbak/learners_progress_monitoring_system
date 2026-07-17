@@ -292,6 +292,27 @@ function classCourseId(PDO $pdo, array $class): int
     return (int) $lookupStatement->fetchColumn();
 }
 
+function classWorkspaceRecordCount(PDO $pdo, string $table, int $classId): int
+{
+    $allowedTables = [
+        'class_material_folders',
+        'class_learning_materials',
+        'class_quizzes',
+        'class_assignments',
+        'class_tasks',
+        'learner_grades',
+    ];
+
+    if (!in_array($table, $allowedTables, true)) {
+        return 0;
+    }
+
+    $countStatement = $pdo->prepare("SELECT COUNT(*) FROM {$table} WHERE class_id = :class_id AND deleted_at IS NULL");
+    $countStatement->execute(['class_id' => $classId]);
+
+    return (int) $countStatement->fetchColumn();
+}
+
 function classTopicExists(PDO $pdo, int $classId, int $topicId): bool
 {
     if ($topicId <= 0) {
@@ -558,6 +579,7 @@ $classCertificateColumns = kiwiClassCertificateColumns($pdo);
 $classEvaluationColumns = kiwiClassEvaluationColumns($pdo);
 $classEvaluationsTableReady = kiwiClassEvaluationsTableReady($pdo);
 $classEvaluationTableColumns = kiwiClassEvaluationTableColumns($pdo);
+$classEvaluationResponseColumns = kiwiClassEvaluationResponseColumns($pdo);
 $classEvaluationMissingColumns = kiwiClassEvaluationMissingTableColumns($classEvaluationTableColumns);
 $classEvaluationTableReady = $classEvaluationsTableReady && $classEvaluationMissingColumns === [];
 
@@ -650,6 +672,17 @@ $class['display_teacher'] = $assignedTeachers
     ? implode(', ', array_map(static fn ($teacher): string => (string) $teacher['full_name'], $assignedTeachers))
     : (string) ($class['teacher'] ?? '');
 $primaryTeacher = $assignedTeachers[0] ?? null;
+$evaluationFormConfig = kiwiEvaluationFormConfig($class);
+
+$evaluationCopyClassStatement = $pdo->prepare(
+    'SELECT id, class_name
+     FROM classes
+     WHERE id <> :id
+       AND deleted_at IS NULL
+     ORDER BY class_name'
+);
+$evaluationCopyClassStatement->execute(['id' => $classId]);
+$evaluationCopyClasses = $evaluationCopyClassStatement->fetchAll();
 
 if ($isTeacher) {
     $teacherStatement = $pdo->prepare('SELECT * FROM teachers WHERE email = :email AND deleted_at IS NULL LIMIT 1');
@@ -2535,6 +2568,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $seminarDate = trim((string) ($_POST['seminar_date'] ?? ''));
         $seminarVenue = trim((string) ($_POST['seminar_venue'] ?? ''));
         $evaluationEnabled = isset($_POST['evaluation_enabled']) ? 1 : 0;
+        $copyEvaluationFromClassId = (int) ($_POST['copy_evaluation_from_class_id'] ?? 0);
+        $evaluationFormConfig = kiwiEvaluationFormConfigFromPost($_POST);
 
         if (!kiwiClassEvaluationColumnsReady($classEvaluationColumns)) {
             $errors[] = 'Evaluation database fields are not installed yet. Add the evaluation columns to the classes table first.';
@@ -2542,6 +2577,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         if ($seminarDate !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $seminarDate)) {
             $errors[] = 'Choose a valid seminar date.';
+        }
+
+        if ($copyEvaluationFromClassId > 0 && empty($classEvaluationColumns['evaluation_form_json'])) {
+            $errors[] = 'Add the evaluation_form_json column before copying evaluation form content.';
+        }
+
+        if ($copyEvaluationFromClassId > 0 && !empty($classEvaluationColumns['evaluation_form_json'])) {
+            $copyStatement = $pdo->prepare(
+                'SELECT evaluation_form_json
+                 FROM classes
+                 WHERE id = :id
+                   AND id <> :current_id
+                   AND deleted_at IS NULL
+                 LIMIT 1'
+            );
+            $copyStatement->execute([
+                'id' => $copyEvaluationFromClassId,
+                'current_id' => $classId,
+            ]);
+            $copySource = $copyStatement->fetch() ?: null;
+
+            if (!$copySource) {
+                $errors[] = 'Choose a valid class to copy the evaluation form from.';
+            } else {
+                $decodedCopy = json_decode((string) ($copySource['evaluation_form_json'] ?? ''), true);
+                $evaluationFormConfig = kiwiNormalizeEvaluationFormConfig(is_array($decodedCopy) ? $decodedCopy : null);
+            }
         }
 
         if (!$errors) {
@@ -2558,6 +2620,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'seminar_venue' => $seminarVenue !== '' ? $seminarVenue : null,
                 'id' => $classId,
             ];
+
+            if (!empty($classEvaluationColumns['evaluation_form_json'])) {
+                $evaluationSetSql .= ',
+                     evaluation_form_json = :evaluation_form_json';
+                $evaluationParams['evaluation_form_json'] = json_encode($evaluationFormConfig, JSON_UNESCAPED_UNICODE);
+            }
 
             if (!empty($classEvaluationColumns['evaluation_enabled'])) {
                 $evaluationSetSql .= ',
@@ -2895,6 +2963,17 @@ $classAverage = (float) $classAverageStatement->fetchColumn();
 $gradeCountStatement = $pdo->prepare('SELECT COUNT(*) FROM learner_grades WHERE class_id = :class_id AND deleted_at IS NULL');
 $gradeCountStatement->execute(['class_id' => $classId]);
 $gradeCount = (int) $gradeCountStatement->fetchColumn();
+$sidebarCounts = [
+    'tasks' => classWorkspaceRecordCount($pdo, 'class_material_folders', $classId),
+    'learners' => count($learners),
+    'teachers' => count($assignedTeachers),
+    'materials' => classWorkspaceRecordCount($pdo, 'class_learning_materials', $classId),
+    'quizzes' => classWorkspaceRecordCount($pdo, 'class_quizzes', $classId),
+    'assignments' => classWorkspaceRecordCount($pdo, 'class_assignments', $classId),
+    'grades' => classWorkspaceRecordCount($pdo, 'class_tasks', $classId),
+    'certificates' => count($learners),
+    'evaluations' => count($evaluationRows),
+];
 $teacherName = (string) ($primaryTeacher['full_name'] ?? ($class['display_teacher'] ?? ''));
 $teacherInitials = $teacherName !== '' ? strtoupper(substr($teacherName, 0, 1)) : 'T';
 
@@ -2944,7 +3023,7 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=20260714-evaluation-modal" rel="stylesheet">
+  <link href="css/style.css?v=20260717-quiz-results" rel="stylesheet">
   <?php echo kiwiSystemThemeStyle(); ?>
 </head>
 <body class="dashboard-page class-workspace-page class-workspace-<?php echo e($tool); ?>">
@@ -2962,31 +3041,31 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
           <a class="<?php echo $tool === 'dashboard' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=dashboard"><i class="fa-solid fa-gauge-high"></i> Class Dashboard</a>
         <?php endif; ?>
         <?php if (!empty($classToolAccess['tasks'])): ?>
-          <a class="<?php echo $tool === 'tasks' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=tasks"><i class="fa-solid fa-list-check"></i> Topics</a>
+          <a class="<?php echo $tool === 'tasks' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=tasks"><i class="fa-solid fa-list-check"></i> <span>Topics</span><span class="sidebar-nav-count"><?php echo $sidebarCounts['tasks']; ?></span></a>
         <?php endif; ?>
         <?php if (!empty($classToolAccess['learners'])): ?>
-          <a class="<?php echo $tool === 'learners' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=learners"><i class="fa-solid fa-users"></i> Learners</a>
+          <a class="<?php echo $tool === 'learners' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=learners"><i class="fa-solid fa-users"></i> <span>Learners</span><span class="sidebar-nav-count"><?php echo $sidebarCounts['learners']; ?></span></a>
         <?php endif; ?>
         <?php if (!empty($classToolAccess['teachers'])): ?>
-          <a class="<?php echo $tool === 'teachers' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=teachers"><i class="fa-solid fa-user-tie"></i> Teachers</a>
+          <a class="<?php echo $tool === 'teachers' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=teachers"><i class="fa-solid fa-user-tie"></i> <span>Teachers</span><span class="sidebar-nav-count"><?php echo $sidebarCounts['teachers']; ?></span></a>
         <?php endif; ?>
         <?php if (!empty($classToolAccess['materials'])): ?>
-          <a class="<?php echo $tool === 'materials' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=materials"><i class="fa-solid fa-folder-open"></i> Materials</a>
+          <a class="<?php echo $tool === 'materials' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=materials"><i class="fa-solid fa-folder-open"></i> <span>Materials</span><span class="sidebar-nav-count"><?php echo $sidebarCounts['materials']; ?></span></a>
         <?php endif; ?>
         <?php if (!empty($classToolAccess['quizzes'])): ?>
-          <a class="<?php echo $tool === 'quizzes' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=quizzes"><i class="fa-solid fa-circle-question"></i> Quizzes</a>
+          <a class="<?php echo $tool === 'quizzes' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=quizzes"><i class="fa-solid fa-circle-question"></i> <span>Quizzes</span><span class="sidebar-nav-count"><?php echo $sidebarCounts['quizzes']; ?></span></a>
         <?php endif; ?>
         <?php if (!empty($classToolAccess['assignments'])): ?>
-          <a class="<?php echo $tool === 'assignments' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=assignments"><i class="fa-solid fa-file-pen"></i> Assignments</a>
+          <a class="<?php echo $tool === 'assignments' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=assignments"><i class="fa-solid fa-file-pen"></i> <span>Assignments</span><span class="sidebar-nav-count"><?php echo $sidebarCounts['assignments']; ?></span></a>
         <?php endif; ?>
         <?php if (!empty($classToolAccess['grades'])): ?>
-          <a class="<?php echo $tool === 'grades' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=grades"><i class="fa-solid fa-star"></i> Grades</a>
+          <a class="<?php echo $tool === 'grades' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=grades"><i class="fa-solid fa-star"></i> <span>Grades</span><span class="sidebar-nav-count"><?php echo $sidebarCounts['grades']; ?></span></a>
         <?php endif; ?>
         <?php if (!empty($classToolAccess['certificates'])): ?>
-          <a class="<?php echo $tool === 'certificates' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=certificates"><i class="fa-solid fa-award"></i> Certificates</a>
+          <a class="<?php echo $tool === 'certificates' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=certificates"><i class="fa-solid fa-award"></i> <span>Certificates</span><span class="sidebar-nav-count"><?php echo $sidebarCounts['certificates']; ?></span></a>
         <?php endif; ?>
         <?php if (!empty($classToolAccess['evaluations'])): ?>
-          <a class="<?php echo $tool === 'evaluations' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=evaluations"><i class="fa-solid fa-clipboard-check"></i> Evaluations</a>
+          <a class="<?php echo $tool === 'evaluations' ? 'active' : ''; ?>" href="class_workspace.php?class_id=<?php echo $classId; ?>&tool=evaluations"><i class="fa-solid fa-clipboard-check"></i> <span>Evaluations</span><span class="sidebar-nav-count"><?php echo $sidebarCounts['evaluations']; ?></span></a>
         <?php endif; ?>
         <a href="<?php echo $isTeacher ? 'teacher_dashboard.php' : 'classes.php'; ?>"><i class="fa-solid fa-arrow-left"></i> Back to Classes</a>
       </nav>
@@ -3557,6 +3636,11 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
                           <h3><?php echo e($quiz['title']); ?></h3>
                         </div>
                         <div class="d-flex align-items-center gap-2">
+                          <?php if (!empty($classToolAccess['quizzes'])): ?>
+                            <a class="btn btn-sm btn-outline-primary" href="quiz-results.php?quiz_id=<?php echo (int) $quiz['id']; ?>">
+                              <i class="fa-solid fa-up-right-from-square me-1"></i>Open Quiz
+                            </a>
+                          <?php endif; ?>
                           <?php if ($canManageQuizzesEdit): ?>
                             <button type="button" class="learner-icon-button edit-quiz-button" data-bs-toggle="modal" data-bs-target="#editQuizModal" data-quiz-id="<?php echo (int) $quiz['id']; ?>" data-title="<?php echo e($quiz['title']); ?>" data-description="<?php echo e((string) ($quiz['description'] ?? '')); ?>" data-topic-id="<?php echo (int) ($quiz['folder_id'] ?? 0); ?>" data-timer-minutes="<?php echo (int) $quiz['timer_minutes']; ?>" data-status="<?php echo e((string) ($quiz['status'] ?? 'Active')); ?>" data-questions="<?php echo e((string) $quizQuestionsJson); ?>" aria-label="Edit quiz">
                               <i class="fa-solid fa-pen"></i>
@@ -4058,7 +4142,7 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
             <div class="d-flex flex-wrap align-items-center justify-content-between gap-3 mb-4">
               <div>
                 <span class="section-kicker">Evaluations</span>
-                <h2 class="h5 mb-0"><?php echo e(kiwiEvaluationFormTitle($class)); ?></h2>
+                <h2 class="h5 mb-0"><?php echo e((string) ($evaluationFormConfig['title'] ?: kiwiEvaluationFormTitle($class))); ?></h2>
               </div>
               <div class="d-flex flex-wrap align-items-center gap-2">
                 <?php if (!empty($classEvaluationColumns['evaluation_enabled'])): ?>
@@ -4086,10 +4170,12 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
                 $evaluationOverallTotal = 0;
                 $evaluationOverallCount = 0;
                 foreach ($evaluationRows as $response) {
-                    foreach (kiwiEvaluationRatingFieldNames() as $fieldName) {
-                        if (isset($response[$fieldName])) {
-                            $evaluationOverallTotal += (int) $response[$fieldName];
-                            $evaluationOverallCount++;
+                    foreach (kiwiEvaluationResponseRatingRows($response, $evaluationFormConfig) as $section) {
+                        foreach ($section['questions'] as $question) {
+                            if ($question['score'] !== null) {
+                                $evaluationOverallTotal += (int) $question['score'];
+                                $evaluationOverallCount++;
+                            }
                         }
                     }
                 }
@@ -4117,15 +4203,7 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
                   <div class="evaluation-response-list is-compact">
                     <?php foreach ($evaluationRows as $response): ?>
                       <?php
-                        $ratingTotal = 0;
-                        $ratingCount = 0;
-                        foreach (kiwiEvaluationRatingFieldNames() as $fieldName) {
-                            if (isset($response[$fieldName])) {
-                                $ratingTotal += (int) $response[$fieldName];
-                                $ratingCount++;
-                            }
-                        }
-                        $ratingAverage = $ratingCount > 0 ? round($ratingTotal / $ratingCount, 2) : 0;
+                        $ratingAverage = kiwiEvaluationResponseAverage($response, $evaluationFormConfig);
                         $ratingPercent = $ratingAverage > 0 ? round(($ratingAverage / 5) * 100, 1) : 0;
                         $responseLearnerName = trim((string) ($response['first_name'] ?? '') . ' ' . (string) ($response['last_name'] ?? ''));
                         $responseDisplayName = $responseLearnerName !== '' ? $responseLearnerName : (string) ($response['attendee_name'] ?? 'Learner');
@@ -4169,6 +4247,26 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
               <input type="hidden" name="action" value="save_evaluation_settings">
               <input type="hidden" name="class_id" value="<?php echo $classId; ?>">
               <input type="hidden" name="tool" value="evaluations">
+              <?php if (empty($classEvaluationColumns['evaluation_form_json'])): ?>
+                <div class="alert alert-warning" role="alert">
+                  Add the <strong>evaluation_form_json</strong> column to manage custom evaluation content and copy forms between classes.
+                </div>
+              <?php endif; ?>
+              <?php if (empty($classEvaluationResponseColumns['rating_answers_json']) || empty($classEvaluationResponseColumns['feedback_answers_json'])): ?>
+                <div class="alert alert-warning" role="alert">
+                  Add <strong>rating_answers_json</strong> and <strong>feedback_answers_json</strong> to save custom evaluation answers from learners.
+                </div>
+              <?php endif; ?>
+              <div class="mb-3">
+                <label class="form-label" for="copy_evaluation_from_class_id">Copy evaluation form from another class</label>
+                <select class="form-select" id="copy_evaluation_from_class_id" name="copy_evaluation_from_class_id">
+                  <option value="0">Do not copy</option>
+                  <?php foreach ($evaluationCopyClasses as $copyClass): ?>
+                    <option value="<?php echo (int) $copyClass['id']; ?>"><?php echo e((string) $copyClass['class_name']); ?></option>
+                  <?php endforeach; ?>
+                </select>
+                <p class="form-text mb-0">If selected, the copied form content will replace the fields below when saved.</p>
+              </div>
               <div class="mb-3">
                 <label class="form-label" for="class_type">Class tag</label>
                 <select class="form-select" id="class_type" name="class_type">
@@ -4204,6 +4302,69 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
                   Add the <strong>evaluation_enabled</strong> column to enable learner evaluation visibility control.
                 </div>
               <?php endif; ?>
+              <hr>
+              <div class="mb-3">
+                <label class="form-label" for="evaluation_form_title">Form title</label>
+                <input type="text" class="form-control" id="evaluation_form_title" name="evaluation_form_title" value="<?php echo e((string) ($evaluationFormConfig['title'] ?? '')); ?>" placeholder="Leave blank to use Course/Seminar Evaluation Form">
+              </div>
+              <div class="mb-3">
+                <label class="form-label" for="evaluation_intro">Intro text</label>
+                <textarea class="form-control" id="evaluation_intro" name="evaluation_intro" rows="3"><?php echo e((string) ($evaluationFormConfig['intro'] ?? '')); ?></textarea>
+              </div>
+              <div class="row g-3">
+                <?php for ($score = 5; $score >= 1; $score--): ?>
+                  <div class="col-md">
+                    <label class="form-label" for="rating_scale_<?php echo $score; ?>">Rating <?php echo $score; ?></label>
+                    <input type="text" class="form-control" id="rating_scale_<?php echo $score; ?>" name="rating_scale_<?php echo $score; ?>" value="<?php echo e((string) ($evaluationFormConfig['rating_scale'][$score] ?? '')); ?>">
+                  </div>
+                <?php endfor; ?>
+              </div>
+              <hr>
+              <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
+                <h3 class="h6 mb-0">Rating Sections</h3>
+                <span class="text-secondary small">One question per line</span>
+              </div>
+              <?php
+                $editorSections = $evaluationFormConfig['sections'] ?? [];
+                $editorSections[] = ['title' => '', 'questions' => []];
+              ?>
+              <?php foreach ($editorSections as $sectionIndex => $section): ?>
+                <div class="evaluation-editor-block">
+                  <label class="form-label" for="evaluation_section_title_<?php echo $sectionIndex; ?>">Section title</label>
+                  <input type="text" class="form-control mb-2" id="evaluation_section_title_<?php echo $sectionIndex; ?>" name="evaluation_section_title[]" value="<?php echo e((string) ($section['title'] ?? '')); ?>" placeholder="Example: Content & Relevancy">
+                  <label class="form-label" for="evaluation_section_questions_<?php echo $sectionIndex; ?>">Questions</label>
+                  <textarea class="form-control" id="evaluation_section_questions_<?php echo $sectionIndex; ?>" name="evaluation_section_questions[]" rows="4" placeholder="Type one question per line"><?php echo e(implode("\n", (array) ($section['questions'] ?? []))); ?></textarea>
+                </div>
+              <?php endforeach; ?>
+              <hr>
+              <div class="row g-3">
+                <div class="col-md-6">
+                  <label class="form-label" for="overall_question">Overall question</label>
+                  <input type="text" class="form-control" id="overall_question" name="overall_question" value="<?php echo e((string) ($evaluationFormConfig['overall_question'] ?? '')); ?>">
+                  <label class="form-label mt-3" for="overall_options">Overall options</label>
+                  <textarea class="form-control" id="overall_options" name="overall_options" rows="4"><?php echo e(implode("\n", (array) ($evaluationFormConfig['overall_options'] ?? []))); ?></textarea>
+                </div>
+                <div class="col-md-6">
+                  <label class="form-label" for="recommend_question">Recommendation question</label>
+                  <input type="text" class="form-control" id="recommend_question" name="recommend_question" value="<?php echo e((string) ($evaluationFormConfig['recommend_question'] ?? '')); ?>">
+                  <label class="form-label mt-3" for="recommend_options">Recommendation options</label>
+                  <textarea class="form-control" id="recommend_options" name="recommend_options" rows="4"><?php echo e(implode("\n", (array) ($evaluationFormConfig['recommend_options'] ?? []))); ?></textarea>
+                </div>
+              </div>
+              <hr>
+              <h3 class="h6">Open-ended feedback prompts</h3>
+              <div class="mb-2">
+                <label class="form-label" for="feedback_question_useful">Prompt 1</label>
+                <input type="text" class="form-control" id="feedback_question_useful" name="feedback_question_useful" value="<?php echo e((string) ($evaluationFormConfig['feedback_questions']['useful'] ?? '')); ?>">
+              </div>
+              <div class="mb-2">
+                <label class="form-label" for="feedback_question_improvements">Prompt 2</label>
+                <input type="text" class="form-control" id="feedback_question_improvements" name="feedback_question_improvements" value="<?php echo e((string) ($evaluationFormConfig['feedback_questions']['improvements'] ?? '')); ?>">
+              </div>
+              <div>
+                <label class="form-label" for="feedback_question_topics">Prompt 3</label>
+                <input type="text" class="form-control" id="feedback_question_topics" name="feedback_question_topics" value="<?php echo e((string) ($evaluationFormConfig['feedback_questions']['topics'] ?? '')); ?>">
+              </div>
             </div>
             <div class="modal-footer">
               <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
@@ -4218,20 +4379,13 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
 
     <?php foreach ($evaluationRows as $response): ?>
       <?php
-        $ratingTotal = 0;
-        $ratingCount = 0;
-        foreach (kiwiEvaluationRatingFieldNames() as $fieldName) {
-            if (isset($response[$fieldName])) {
-                $ratingTotal += (int) $response[$fieldName];
-                $ratingCount++;
-            }
-        }
-        $ratingAverage = $ratingCount > 0 ? round($ratingTotal / $ratingCount, 2) : 0;
+        $ratingAverage = kiwiEvaluationResponseAverage($response, $evaluationFormConfig);
         $ratingPercent = $ratingAverage > 0 ? round(($ratingAverage / 5) * 100, 1) : 0;
         $responseLearnerName = trim((string) ($response['first_name'] ?? '') . ' ' . (string) ($response['last_name'] ?? ''));
         $responseDisplayName = $responseLearnerName !== '' ? $responseLearnerName : (string) ($response['attendee_name'] ?? 'Learner');
         $responseEmail = (string) ($response['learner_email'] ?? $response['attendee_email'] ?? '');
         $responseModalId = 'evaluationResponseModal' . (int) $response['id'];
+        $responseFeedback = kiwiEvaluationResponseFeedback($response);
       ?>
       <div class="modal fade" id="<?php echo e($responseModalId); ?>" tabindex="-1" aria-labelledby="<?php echo e($responseModalId); ?>Label" aria-hidden="true">
         <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
@@ -4253,22 +4407,22 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
                 <span><?php echo e(date('M d, Y g:i A', strtotime((string) $response['created_at']))); ?></span>
               </div>
               <div class="evaluation-rating-report">
-                <?php foreach (kiwiEvaluationRatingItems() as $section): ?>
+                <?php foreach (kiwiEvaluationResponseRatingRows($response, $evaluationFormConfig) as $section): ?>
                   <div class="evaluation-rating-report-section">
                     <h4><?php echo e((string) $section['title']); ?></h4>
-                    <?php foreach ($section['items'] as $fieldName => $label): ?>
+                    <?php foreach ($section['questions'] as $question): ?>
                       <div class="evaluation-rating-report-row">
-                        <span><?php echo e((string) $label); ?></span>
-                        <strong><?php echo e((string) ($response[$fieldName] ?? 'N/A')); ?></strong>
+                        <span><?php echo e((string) $question['label']); ?></span>
+                        <strong><?php echo e($question['score'] !== null ? (string) $question['score'] : 'N/A'); ?></strong>
                       </div>
                     <?php endforeach; ?>
                   </div>
                 <?php endforeach; ?>
               </div>
               <div class="evaluation-feedback">
-                <p><strong>Useful:</strong> <?php echo e((string) ($response['feedback_useful'] ?? '')); ?></p>
-                <p><strong>Improvements:</strong> <?php echo e((string) ($response['feedback_improvements'] ?? '')); ?></p>
-                <p><strong>Future topics:</strong> <?php echo e((string) ($response['feedback_topics'] ?? '')); ?></p>
+                <p><strong><?php echo e((string) $evaluationFormConfig['feedback_questions']['useful']); ?>:</strong> <?php echo e((string) $responseFeedback['useful']); ?></p>
+                <p><strong><?php echo e((string) $evaluationFormConfig['feedback_questions']['improvements']); ?>:</strong> <?php echo e((string) $responseFeedback['improvements']); ?></p>
+                <p><strong><?php echo e((string) $evaluationFormConfig['feedback_questions']['topics']); ?>:</strong> <?php echo e((string) $responseFeedback['topics']); ?></p>
                 <?php if (!empty($response['attendee_name']) || !empty($response['attendee_email'])): ?>
                   <?php if (!empty($response['attendee_name'])): ?><p><strong>Attendee name:</strong> <?php echo e((string) $response['attendee_name']); ?></p><?php endif; ?>
                   <?php if (!empty($response['attendee_email'])): ?><p><strong>Attendee email:</strong> <?php echo e((string) $response['attendee_email']); ?></p><?php endif; ?>
@@ -4837,13 +4991,18 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
                 </div>
                 <label class="form-label">Question text</label>
                 <textarea class="form-control mb-3" name="questions[0][text]" rows="2" required></textarea>
+                <div class="quiz-answer-key-hint">
+                  <i class="fa-solid fa-circle-check"></i>
+                  Select the correct answer by choosing the radio button beside a choice.
+                </div>
                 <div class="row g-3">
                   <?php for ($choiceIndex = 0; $choiceIndex < 4; $choiceIndex++): ?>
                     <div class="col-md-6">
                       <label class="form-label">Choice <?php echo $choiceIndex + 1; ?></label>
                       <div class="input-group">
-                        <span class="input-group-text">
+                        <span class="input-group-text quiz-correct-selector">
                           <input class="form-check-input mt-0" type="radio" name="questions[0][correct]" value="<?php echo $choiceIndex; ?>" <?php echo $choiceIndex === 0 ? 'checked' : ''; ?> aria-label="Correct answer">
+                          <span>Correct</span>
                         </span>
                         <input type="text" class="form-control" name="questions[0][choices][<?php echo $choiceIndex; ?>]" required>
                       </div>
@@ -4929,13 +5088,18 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
                 </div>
                 <label class="form-label">Question text</label>
                 <textarea class="form-control mb-3" name="questions[0][text]" rows="2" required></textarea>
+                <div class="quiz-answer-key-hint">
+                  <i class="fa-solid fa-circle-check"></i>
+                  Select the correct answer by choosing the radio button beside a choice.
+                </div>
                 <div class="row g-3">
                   <?php for ($choiceIndex = 0; $choiceIndex < 4; $choiceIndex++): ?>
                     <div class="col-md-6">
                       <label class="form-label">Choice <?php echo $choiceIndex + 1; ?></label>
                       <div class="input-group">
-                        <span class="input-group-text">
+                        <span class="input-group-text quiz-correct-selector">
                           <input class="form-check-input mt-0" type="radio" name="questions[0][correct]" value="<?php echo $choiceIndex; ?>" <?php echo $choiceIndex === 0 ? 'checked' : ''; ?> aria-label="Correct answer">
+                          <span>Correct</span>
                         </span>
                         <input type="text" class="form-control" name="questions[0][choices][<?php echo $choiceIndex; ?>]" required>
                       </div>
@@ -5137,6 +5301,6 @@ $mailError = trim((string) ($_GET['mail_error'] ?? ''));
       }
     })();
   </script>
-  <script src="js/app.js?v=20260714-evaluation-modal"></script>
+  <script src="js/app.js?v=20260717-eval-builder"></script>
 </body>
 </html>

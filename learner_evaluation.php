@@ -70,10 +70,20 @@ $evaluationColumns = kiwiClassEvaluationColumns($pdo);
 $evaluationColumnsReady = kiwiClassEvaluationColumnsReady($evaluationColumns);
 $evaluationTableReady = kiwiClassEvaluationsTableReady($pdo);
 $evaluationTableColumns = kiwiClassEvaluationTableColumns($pdo);
+$evaluationResponseColumns = kiwiClassEvaluationResponseColumns($pdo);
 $evaluationMissingColumns = kiwiClassEvaluationMissingTableColumns($evaluationTableColumns);
-$evaluationDataReady = $evaluationTableReady && $evaluationMissingColumns === [];
+$evaluationHasCustomConfig = trim((string) ($course['evaluation_form_json'] ?? '')) !== '';
+$evaluationMissingResponseColumns = [];
+if ($evaluationHasCustomConfig && empty($evaluationResponseColumns['rating_answers_json'])) {
+    $evaluationMissingResponseColumns[] = 'rating_answers_json';
+}
+if ($evaluationHasCustomConfig && empty($evaluationResponseColumns['feedback_answers_json'])) {
+    $evaluationMissingResponseColumns[] = 'feedback_answers_json';
+}
+$evaluationDataReady = $evaluationTableReady && $evaluationMissingColumns === [] && $evaluationMissingResponseColumns === [];
 $evaluationEnabled = kiwiEvaluationEnabled($course, $evaluationColumns);
-$ratingSections = kiwiEvaluationRatingItems();
+$evaluationFormConfig = kiwiEvaluationFormConfig($course);
+$ratingSections = $evaluationFormConfig['sections'];
 $existingEvaluation = null;
 
 if (!$evaluationColumnsReady || !$evaluationDataReady || !$evaluationEnabled) {
@@ -95,7 +105,7 @@ if (!$evaluationColumnsReady || !$evaluationDataReady || !$evaluationEnabled) {
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=20260714-evaluation-required" rel="stylesheet">
+  <link href="css/style.css?v=20260717-eval-builder" rel="stylesheet">
 </head>
 <body class="dashboard-page">
   <div class="app-layout">
@@ -149,8 +159,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     $ratings = [];
-    foreach ($ratingSections as $section) {
-        foreach ($section['items'] as $field => $label) {
+    foreach ($ratingSections as $sectionIndex => $section) {
+        foreach ((array) ($section['questions'] ?? []) as $questionIndex => $_label) {
+            $field = kiwiEvaluationQuestionField((int) $sectionIndex, (int) $questionIndex);
             $value = (int) ($_POST[$field] ?? 0);
             if ($value < 1 || $value > 5) {
                 $errors[] = 'Complete all rating items from 1 to 5.';
@@ -168,11 +179,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $attendeeName = trim((string) ($_POST['attendee_name'] ?? ''));
     $attendeeEmail = trim((string) ($_POST['attendee_email'] ?? ''));
 
-    if (!in_array($overallRating, ['Excellent', 'Good', 'Satisfactory', 'Unsatisfactory'], true)) {
+    if (!in_array($overallRating, (array) $evaluationFormConfig['overall_options'], true)) {
         $errors[] = 'Choose an overall rating.';
     }
 
-    if (!in_array($recommend, ['Yes', 'No', 'Maybe'], true)) {
+    if (!in_array($recommend, (array) $evaluationFormConfig['recommend_options'], true)) {
         $errors[] = 'Choose a recommendation answer.';
     }
 
@@ -185,7 +196,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if (!$errors) {
-        $params = array_merge($ratings, [
+        $feedbackAnswers = [
+            'useful' => $feedbackUseful,
+            'improvements' => $feedbackImprovements,
+            'topics' => $feedbackTopics,
+        ];
+        $legacyRatings = kiwiEvaluationLegacyRatingValues($ratings);
+        $params = array_merge($legacyRatings, [
             'class_id' => $classId,
             'learner_id' => (int) $learner['id'],
             'overall_rating' => $overallRating,
@@ -198,17 +215,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         ]);
 
         try {
-            $statement = $pdo->prepare(
-                'INSERT INTO class_evaluations
-                    (class_id, learner_id, content_objectives_clear, content_relevant, content_organized, content_depth,
+            $insertColumns = 'class_id, learner_id, content_objectives_clear, content_relevant, content_organized, content_depth,
                      presenter_knowledge, presenter_style, presenter_questions, presenter_pace,
                      logistics_venue, logistics_technology, logistics_registration, logistics_materials,
-                     overall_rating, recommend, feedback_useful, feedback_improvements, feedback_topics, attendee_name, attendee_email)
-                 VALUES
-                    (:class_id, :learner_id, :content_objectives_clear, :content_relevant, :content_organized, :content_depth,
+                     overall_rating, recommend, feedback_useful, feedback_improvements, feedback_topics, attendee_name, attendee_email';
+            $insertValues = ':class_id, :learner_id, :content_objectives_clear, :content_relevant, :content_organized, :content_depth,
                      :presenter_knowledge, :presenter_style, :presenter_questions, :presenter_pace,
                      :logistics_venue, :logistics_technology, :logistics_registration, :logistics_materials,
-                     :overall_rating, :recommend, :feedback_useful, :feedback_improvements, :feedback_topics, :attendee_name, :attendee_email)'
+                     :overall_rating, :recommend, :feedback_useful, :feedback_improvements, :feedback_topics, :attendee_name, :attendee_email';
+
+            if (!empty($evaluationResponseColumns['rating_answers_json'])) {
+                $insertColumns .= ', rating_answers_json';
+                $insertValues .= ', :rating_answers_json';
+                $params['rating_answers_json'] = json_encode($ratings, JSON_UNESCAPED_UNICODE);
+            }
+
+            if (!empty($evaluationResponseColumns['feedback_answers_json'])) {
+                $insertColumns .= ', feedback_answers_json';
+                $insertValues .= ', :feedback_answers_json';
+                $params['feedback_answers_json'] = json_encode($feedbackAnswers, JSON_UNESCAPED_UNICODE);
+            }
+
+            $statement = $pdo->prepare(
+                'INSERT INTO class_evaluations (' . $insertColumns . ')
+                 VALUES (' . $insertValues . ')'
             );
             $statement->execute($params);
         } catch (PDOException $exception) {
@@ -245,7 +275,7 @@ function postedOrExisting(string $field, ?array $existingEvaluation, string $fal
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=20260714-evaluation-required" rel="stylesheet">
+  <link href="css/style.css?v=20260717-eval-builder" rel="stylesheet">
 </head>
 <body class="dashboard-page">
   <div class="app-layout">
@@ -317,6 +347,9 @@ function postedOrExisting(string $field, ?array $existingEvaluation, string $fal
             <?php if ($evaluationMissingColumns): ?>
               <p class="small text-danger mb-0">Missing database fields: <?php echo e(implode(', ', $evaluationMissingColumns)); ?></p>
             <?php endif; ?>
+            <?php if ($evaluationMissingResponseColumns): ?>
+              <p class="small text-danger mb-0">Missing custom answer fields: <?php echo e(implode(', ', $evaluationMissingResponseColumns)); ?></p>
+            <?php endif; ?>
           </div>
         <?php elseif ($existingEvaluation): ?>
           <div class="empty-state">
@@ -327,22 +360,20 @@ function postedOrExisting(string $field, ?array $existingEvaluation, string $fal
           <form method="post" class="evaluation-form-card" novalidate>
             <input type="hidden" name="course_id" value="<?php echo $courseId; ?>">
             <div class="evaluation-form-head">
-              <h2><?php echo e(kiwiEvaluationFormTitle($course)); ?></h2>
+              <h2><?php echo e((string) ($evaluationFormConfig['title'] ?: kiwiEvaluationFormTitle($course))); ?></h2>
               <div class="evaluation-details">
                 <p><strong><?php echo ($course['class_type'] ?? 'Course') === 'Seminar' ? 'Seminar Title' : 'Course Title'; ?>:</strong> <?php echo e((string) ($course['seminar_title'] ?? $course['course_name'])); ?></p>
                 <p><strong><?php echo ($course['class_type'] ?? 'Course') === 'Seminar' ? 'Presenter/Speaker' : 'Teacher'; ?>:</strong> <?php echo e((string) ($course['seminar_presenter'] ?? '')); ?></p>
                 <p><strong>Date:</strong> <?php echo !empty($course['seminar_date']) ? e(date('M d, Y', strtotime((string) $course['seminar_date']))) : 'N/A'; ?> <strong class="ms-3">Venue/Platform:</strong> <?php echo e((string) ($course['seminar_venue'] ?? 'N/A')); ?></p>
               </div>
-              <p class="mb-0"><em>Thank you for participating. Your feedback helps us improve future events. Please rate each item by checking the number that best matches your experience.</em></p>
+              <p class="mb-0"><em><?php echo e((string) $evaluationFormConfig['intro']); ?></em></p>
             </div>
 
             <div class="evaluation-scale">
               <strong>Rating Scale:</strong>
-              <span>5 = Strongly Agree (Excellent)</span>
-              <span>4 = Agree (Good)</span>
-              <span>3 = Neutral (Satisfactory)</span>
-              <span>2 = Disagree (Poor)</span>
-              <span>1 = Strongly Disagree (Very Poor)</span>
+              <?php for ($score = 5; $score >= 1; $score--): ?>
+                <span><?php echo $score; ?> = <?php echo e((string) $evaluationFormConfig['rating_scale'][$score]); ?></span>
+              <?php endfor; ?>
             </div>
 
             <?php foreach ($ratingSections as $sectionIndex => $section): ?>
@@ -353,7 +384,8 @@ function postedOrExisting(string $field, ?array $existingEvaluation, string $fal
                     <strong>Criteria</strong>
                     <span>5</span><span>4</span><span>3</span><span>2</span><span>1</span>
                   </div>
-                  <?php foreach ($section['items'] as $field => $label): ?>
+                  <?php foreach ((array) ($section['questions'] ?? []) as $questionIndex => $label): ?>
+                    <?php $field = kiwiEvaluationQuestionField((int) $sectionIndex, (int) $questionIndex); ?>
                     <div class="evaluation-rating-row">
                       <label><?php echo e($label); ?></label>
                       <?php for ($score = 5; $score >= 1; $score--): ?>
@@ -369,8 +401,8 @@ function postedOrExisting(string $field, ?array $existingEvaluation, string $fal
               <h3>4. Overall Assessment</h3>
               <div class="row g-4">
                 <div class="col-md-6">
-                  <label class="form-label">Overall, how would you rate this <?php echo ($course['class_type'] ?? 'Course') === 'Seminar' ? 'seminar' : 'course'; ?>?</label>
-                  <?php foreach (['Excellent', 'Good', 'Satisfactory', 'Unsatisfactory'] as $option): ?>
+                  <label class="form-label"><?php echo e(str_replace('{type}', ($course['class_type'] ?? 'Course') === 'Seminar' ? 'seminar' : 'course', (string) $evaluationFormConfig['overall_question'])); ?></label>
+                  <?php foreach ((array) $evaluationFormConfig['overall_options'] as $option): ?>
                     <div class="form-check">
                       <input class="form-check-input" type="radio" name="overall_rating" id="overall_<?php echo e($option); ?>" value="<?php echo e($option); ?>" <?php echo postedOrExisting('overall_rating', $existingEvaluation) === $option ? 'checked' : ''; ?> required>
                       <label class="form-check-label" for="overall_<?php echo e($option); ?>"><?php echo e($option); ?></label>
@@ -378,8 +410,8 @@ function postedOrExisting(string $field, ?array $existingEvaluation, string $fal
                   <?php endforeach; ?>
                 </div>
                 <div class="col-md-6">
-                  <label class="form-label">Would you recommend this <?php echo ($course['class_type'] ?? 'Course') === 'Seminar' ? 'seminar' : 'course'; ?> to colleagues?</label>
-                  <?php foreach (['Yes', 'No', 'Maybe'] as $option): ?>
+                  <label class="form-label"><?php echo e(str_replace('{type}', ($course['class_type'] ?? 'Course') === 'Seminar' ? 'seminar' : 'course', (string) $evaluationFormConfig['recommend_question'])); ?></label>
+                  <?php foreach ((array) $evaluationFormConfig['recommend_options'] as $option): ?>
                     <div class="form-check">
                       <input class="form-check-input" type="radio" name="recommend" id="recommend_<?php echo e($option); ?>" value="<?php echo e($option); ?>" <?php echo postedOrExisting('recommend', $existingEvaluation) === $option ? 'checked' : ''; ?> required>
                       <label class="form-check-label" for="recommend_<?php echo e($option); ?>"><?php echo e($option); ?></label>
@@ -391,11 +423,11 @@ function postedOrExisting(string $field, ?array $existingEvaluation, string $fal
 
             <section class="evaluation-section">
               <h3>5. Open-Ended Feedback</h3>
-              <label class="form-label required-field-label" for="feedback_useful">What did you find most useful or valuable?</label>
+              <label class="form-label required-field-label" for="feedback_useful"><?php echo e((string) $evaluationFormConfig['feedback_questions']['useful']); ?></label>
               <textarea class="form-control mb-3" id="feedback_useful" name="feedback_useful" rows="2" required><?php echo e(postedOrExisting('feedback_useful', $existingEvaluation)); ?></textarea>
-              <label class="form-label required-field-label" for="feedback_improvements">What specific improvements could be made?</label>
+              <label class="form-label required-field-label" for="feedback_improvements"><?php echo e((string) $evaluationFormConfig['feedback_questions']['improvements']); ?></label>
               <textarea class="form-control mb-3" id="feedback_improvements" name="feedback_improvements" rows="2" required><?php echo e(postedOrExisting('feedback_improvements', $existingEvaluation)); ?></textarea>
-              <label class="form-label required-field-label" for="feedback_topics">What related topics would you like covered in the future?</label>
+              <label class="form-label required-field-label" for="feedback_topics"><?php echo e((string) $evaluationFormConfig['feedback_questions']['topics']); ?></label>
               <textarea class="form-control" id="feedback_topics" name="feedback_topics" rows="2" required><?php echo e(postedOrExisting('feedback_topics', $existingEvaluation)); ?></textarea>
             </section>
 
@@ -425,6 +457,6 @@ function postedOrExisting(string $field, ?array $existingEvaluation, string $fal
   <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
-  <script src="js/app.js?v=20260714-evaluation-required"></script>
+  <script src="js/app.js?v=20260717-eval-builder"></script>
 </body>
 </html>
