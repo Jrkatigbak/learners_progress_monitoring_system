@@ -1974,6 +1974,11 @@ body {
   padding: 12px 0 18px;
 }
 
+.quiz-review-list {
+  display: grid;
+  gap: 12px;
+}
+
 .quiz-answer-detail {
   display: flex;
   align-items: flex-start;

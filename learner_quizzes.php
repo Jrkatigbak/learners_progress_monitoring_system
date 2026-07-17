@@ -72,6 +72,7 @@ $learnerInitials = strtoupper(substr($learnerName, 0, 1));
 $activeQuiz = null;
 $questions = [];
 $existingAttempt = null;
+$attemptAnswerRows = [];
 
 if ($learner && $quizId > 0) {
     $activeQuiz = learnerCanOpenQuiz($pdo, (int) $learner['id'], $quizId);
@@ -115,6 +116,37 @@ if ($learner && $quizId > 0) {
             'learner_id' => (int) $learner['id'],
         ]);
         $existingAttempt = $attemptStatement->fetch() ?: null;
+
+        if ($existingAttempt) {
+            $answerReviewStatement = $pdo->prepare(
+                'SELECT quiz_questions.id AS question_id,
+                        quiz_questions.question_text,
+                        quiz_questions.position AS question_position,
+                        selected_choice.choice_text AS selected_choice,
+                        correct_choice.choice_text AS correct_choice,
+                        quiz_attempt_answers.is_correct
+                 FROM quiz_questions
+                 LEFT JOIN quiz_attempt_answers
+                   ON quiz_attempt_answers.question_id = quiz_questions.id
+                  AND quiz_attempt_answers.attempt_id = :attempt_id
+                  AND quiz_attempt_answers.deleted_at IS NULL
+                 LEFT JOIN quiz_choices AS selected_choice
+                   ON selected_choice.id = quiz_attempt_answers.choice_id
+                  AND selected_choice.deleted_at IS NULL
+                 LEFT JOIN quiz_choices AS correct_choice
+                   ON correct_choice.question_id = quiz_questions.id
+                  AND correct_choice.is_correct = 1
+                  AND correct_choice.deleted_at IS NULL
+                 WHERE quiz_questions.quiz_id = :quiz_id
+                   AND quiz_questions.deleted_at IS NULL
+                 ORDER BY quiz_questions.position, quiz_questions.id'
+            );
+            $answerReviewStatement->execute([
+                'attempt_id' => (int) $existingAttempt['id'],
+                'quiz_id' => (int) $activeQuiz['id'],
+            ]);
+            $attemptAnswerRows = $answerReviewStatement->fetchAll();
+        }
     }
 }
 
@@ -295,7 +327,7 @@ $successMessages = [
   <script>
     document.documentElement.setAttribute('data-theme', localStorage.getItem('kiwi-dashboard-theme') || 'light');
   </script>
-  <link href="css/style.css?v=20260713-learner-dashboard-nav" rel="stylesheet">
+  <link href="css/style.css?v=20260717-learner-quiz-review" rel="stylesheet">
 </head>
 <body class="dashboard-page">
   <div class="app-layout">
@@ -378,6 +410,31 @@ $successMessages = [
                 <p><?php echo (int) $existingAttempt['correct_answers']; ?> of <?php echo (int) $existingAttempt['total_questions']; ?> correct</p>
                 <small class="text-secondary">Submitted <?php echo e(date('M d, Y h:i A', strtotime($existingAttempt['submitted_at']))); ?></small>
               </div>
+              <?php if ($attemptAnswerRows): ?>
+                <div class="quiz-review-list mt-4">
+                  <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+                    <div>
+                      <span class="section-kicker">Answer Review</span>
+                      <h3 class="h6 mb-0">Question result breakdown</h3>
+                    </div>
+                    <span class="badge text-bg-primary"><?php echo count($attemptAnswerRows); ?> item<?php echo count($attemptAnswerRows) === 1 ? '' : 's'; ?></span>
+                  </div>
+                  <?php foreach ($attemptAnswerRows as $answerIndex => $answer): ?>
+                    <?php $isCorrect = (int) ($answer['is_correct'] ?? 0) === 1; ?>
+                    <article class="quiz-answer-detail <?php echo $isCorrect ? 'is-correct' : 'is-wrong'; ?>">
+                      <div>
+                        <span class="material-type">Question <?php echo $answerIndex + 1; ?></span>
+                        <strong><?php echo e((string) $answer['question_text']); ?></strong>
+                        <p class="mb-1">Your answer: <?php echo e((string) ($answer['selected_choice'] ?? 'No answer selected')); ?></p>
+                        <p class="mb-0">Correct answer: <?php echo e((string) ($answer['correct_choice'] ?? 'No answer key')); ?></p>
+                      </div>
+                      <span class="badge <?php echo $isCorrect ? 'text-bg-success' : 'text-bg-danger'; ?>">
+                        <?php echo $isCorrect ? 'Correct' : 'Wrong'; ?>
+                      </span>
+                    </article>
+                  <?php endforeach; ?>
+                </div>
+              <?php endif; ?>
             <?php elseif (!$questions): ?>
               <div class="empty-state">
                 <i class="fa-solid fa-circle-question"></i>
@@ -478,6 +535,6 @@ $successMessages = [
       renderTimer();
     })();
   </script>
-  <script src="js/app.js?v=20260713-learner-dashboard-nav"></script>
+  <script src="js/app.js?v=20260717-learner-quiz-review"></script>
 </body>
 </html>
